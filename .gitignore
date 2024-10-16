@@ -1,3 +1,5 @@
+.vscode/
+Scripts/venv/
 # Eclipse
 .settings/
 .metadata/
