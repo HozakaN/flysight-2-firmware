@@ -29,6 +29,7 @@
 #include "ff.h"
 #include "resource_manager.h"
 #include "stm32_seq.h"
+#include "mode.h"
 
 #include <stdlib.h>
 
@@ -54,6 +55,7 @@ typedef enum
 	FS_CRS_COMMAND_FILE_DATA = 0x10,
 	FS_CRS_COMMAND_FILE_INFO = 0x11,
 	FS_CRS_COMMAND_FILE_ACK  = 0x12,
+	FS_CRS_COMMAND_MODE      = 0x13,
 	FS_CRS_COMMAND_NAK       = 0xf0,
 	FS_CRS_COMMAND_ACK       = 0xf1,
 	FS_CRS_COMMAND_PING      = 0xfe,
@@ -330,6 +332,43 @@ static FS_CRS_State_t FS_CRS_State_Idle(void)
 				break;
 			case FS_CRS_COMMAND_PING:
 				FS_CRS_SendAck(FS_CRS_COMMAND_PING);
+				break;
+			case FS_CRS_COMMAND_MODE:
+				if (packet->length <= 1) {
+					FS_CRS_SendNak(FS_CRS_COMMAND_MODE);
+				}
+				FS_Mode_State_t mode = (FS_Mode_State_t) packet->data[1];
+				FS_Mode_State_t currentMode = FS_Mode_State();
+				switch (mode) {
+				        case FS_MODE_STATE_SLEEP:
+				            if (currentMode == FS_MODE_STATE_ACTIVE) {
+				            	FS_Mode_PushQueue(FS_MODE_EVENT_BUTTON_PRESSED);
+								FS_CRS_SendAck(FS_CRS_COMMAND_MODE);
+				            } else {
+								FS_CRS_SendNak(FS_CRS_COMMAND_MODE);
+				            }
+				            break;
+
+				        case FS_MODE_STATE_ACTIVE:
+				            if (currentMode == FS_MODE_STATE_SLEEP) {
+				            	FS_Mode_PushQueue(FS_MODE_EVENT_BUTTON_PRESSED);
+								FS_CRS_SendAck(FS_CRS_COMMAND_MODE);
+				            } else {
+								FS_CRS_SendNak(FS_CRS_COMMAND_MODE);
+				            }
+				            break;
+
+//				        case FS_MODE_STATE_START:
+//				            // handle by START_PISTOL. Check how state is changed from there
+//				            break;
+
+				        default:
+				            // technically shouldn't happen since we checked bounds
+							FS_CRS_SendNak(FS_CRS_COMMAND_MODE);
+				            break;
+				    }
+				//uint8_t mode = (uint8_t)FS_Mode_State();
+				//FS_CRS_SendPacket(FS_CRS_COMMAND_MODE, &mode, sizeof(mode));
 				break;
 			default:
 				FS_CRS_SendNak(packet->data[0]);

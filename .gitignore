@@ -15,3 +15,8 @@ Binary/
 
 # Locally stored "Eclipse launch configurations"
 *.launch
+
+# Mac OS
+.DS_Store
+Drivers/.DS_Store
+USB_Device/.DS_Store
