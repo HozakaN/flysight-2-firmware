@@ -17,3 +17,6 @@ Deploy/Firmware_To_Deploy/*
 
 # Claude Code files
 .claude/
+
+# Test build products
+Tests/*.exe
