@@ -31,6 +31,8 @@
 #include "usbd_core.h"
 
 #include "usbd_msc.h"
+#include "usbd_cdc.h"
+#include "usbd_composite.h"
 
 /* USER CODE BEGIN Includes */
 
@@ -474,6 +476,11 @@ USBD_StatusTypeDef USBD_LL_Init(USBD_HandleTypeDef *pdev)
   HAL_PCDEx_PMAConfig((PCD_HandleTypeDef*)pdev->pData , 0x81 , PCD_SNG_BUF, 0x98);
   HAL_PCDEx_PMAConfig((PCD_HandleTypeDef*)pdev->pData , 0x01 , PCD_SNG_BUF, 0xD8);
   /* USER CODE END EndPoint_Configuration_MSC */
+
+  /* CDC Endpoints PMA Configuration */
+  HAL_PCDEx_PMAConfig((PCD_HandleTypeDef*)pdev->pData , COMPOSITE_CDC_IN_EP  , PCD_SNG_BUF, 0x118);
+  HAL_PCDEx_PMAConfig((PCD_HandleTypeDef*)pdev->pData , COMPOSITE_CDC_OUT_EP , PCD_SNG_BUF, 0x158);
+  HAL_PCDEx_PMAConfig((PCD_HandleTypeDef*)pdev->pData , COMPOSITE_CDC_CMD_EP , PCD_SNG_BUF, 0x198);
   return USBD_OK;
 }
 
@@ -766,9 +773,27 @@ void USBD_LL_Delay(uint32_t Delay)
   */
 void *USBD_static_malloc(uint32_t size)
 {
+  /*
+   * Two static buffers for the composite device.
+   * MSC is always allocated first, CDC second (determined by Composite_Init order).
+   * alloc_index resets to 0 after both are allocated, so reinit works correctly.
+   */
+  static uint32_t msc_buf[(sizeof(USBD_MSC_BOT_HandleTypeDef) / 4U) + 1U];
+  static uint32_t cdc_buf[(sizeof(USBD_CDC_HandleTypeDef) / 4U) + 1U];
+  static uint8_t alloc_idx = 0U;
+
   UNUSED(size);
-  static uint32_t mem[(sizeof(USBD_MSC_BOT_HandleTypeDef)/4)+1];/* On 32-bit boundary */
-  return mem;
+
+  if (alloc_idx == 0U)
+  {
+    alloc_idx = 1U;
+    return msc_buf;
+  }
+  else
+  {
+    alloc_idx = 0U;
+    return cdc_buf;
+  }
 }
 
 /**

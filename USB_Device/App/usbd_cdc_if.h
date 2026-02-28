@@ -1,7 +1,7 @@
 /***************************************************************************
 **                                                                        **
 **  FlySight 2 firmware                                                   **
-**  Copyright 2023 Bionic Avionics Inc.                                   **
+**  Copyright 2024 Bionic Avionics Inc.                                   **
 **                                                                        **
 **  This program is free software: you can redistribute it and/or modify  **
 **  it under the terms of the GNU General Public License as published by  **
@@ -21,72 +21,21 @@
 **  Website: http://flysight.ca/                                          **
 ****************************************************************************/
 
-#include "main.h"
-#include "app_common.h"
-#include "cli.h"
-#include "resource_manager.h"
-#include "state.h"
-#include "usb_control.h"
-#include "usb_device.h"
-#include "usbd_core.h"
+#ifndef USBD_CDC_IF_H_
+#define USBD_CDC_IF_H_
 
-extern USBD_HandleTypeDef hUsbDeviceFS;
-extern UART_HandleTypeDef huart1;
+#ifdef __cplusplus
+extern "C" {
+#endif
 
-void FS_USBMode_Init(void)
-{
-	/* Initialize microSD */
-	FS_ResourceManager_RequestResource(FS_RESOURCE_MICROSD);
+#include "usbd_cdc.h"
 
-	/* Initialize controller */
-	FS_USBControl_Init();
+extern USBD_CDC_ItfTypeDef USBD_CDC_fops;
 
-	/* Algorithm to use USB on CPU1 comes from AN5289 Figure 9 */
+uint8_t CDC_Transmit_FS(uint8_t *Buf, uint16_t Len);
 
-	/* Configure peripheral clocks */
-	PeriphClock_Config();
-
-	/* Enable USB interface */
-	MX_USB_Device_Init();
-
-	/* Initialize CLI over CDC */
-	FS_CLI_Init();
+#ifdef __cplusplus
 }
+#endif
 
-void FS_USBMode_DeInit(void)
-{
-	/* De-initialize CLI */
-	FS_CLI_DeInit();
-
-	/* Disable controller */
-	FS_USBControl_DeInit();
-
-	/* Algorithm to use USB on CPU1 comes from AN5289 Figure 9 */
-
-	/* Disable USB interface */
-	if (USBD_DeInit(&hUsbDeviceFS) != USBD_OK)
-	{
-		Error_Handler();
-	}
-
-	/* Disable USB power */
-	HAL_PWREx_DisableVddUSB();
-
-	/* Get Sem0 */
-	LL_HSEM_1StepLock(HSEM, CFG_HW_RNG_SEMID);
-
-	/* Disable HSI48 */
-	LL_RCC_HSI48_Disable();
-
-	/* Release Sem0 */
-	LL_HSEM_ReleaseLock(HSEM, CFG_HW_RNG_SEMID, 0);
-
-	/* Release HSI48 semaphore */
-	LL_HSEM_ReleaseLock(HSEM, CFG_HW_CLK48_CONFIG_SEMID, 0);
-
-	/* De-initialize microSD */
-	FS_ResourceManager_ReleaseResource(FS_RESOURCE_MICROSD);
-
-	/* Update persistent state */
-	FS_State_Update();
-}
+#endif /* USBD_CDC_IF_H_ */

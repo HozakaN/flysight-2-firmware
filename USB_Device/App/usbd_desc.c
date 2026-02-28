@@ -72,7 +72,7 @@
 #define USBD_MANUFACTURER_STRING     "Bionic Avionics"
 #define USBD_PID     1385
 #define USBD_PRODUCT_STRING     "FlySight GPS"
-#define USBD_CONFIGURATION_STRING     "MSC Config"
+#define USBD_CONFIGURATION_STRING     "Composite Config"
 #define USBD_INTERFACE_STRING     "MSC Interface"
 
 /* USER CODE BEGIN PRIVATE_DEFINES */
@@ -145,6 +145,18 @@ USBD_DescriptorsTypeDef MSC_Desc =
   USBD_MSC_InterfaceStrDescriptor
 };
 
+/* Composite descriptor reuses the same string descriptors */
+USBD_DescriptorsTypeDef Composite_Desc =
+{
+  USBD_MSC_DeviceDescriptor,
+  USBD_MSC_LangIDStrDescriptor,
+  USBD_MSC_ManufacturerStrDescriptor,
+  USBD_MSC_ProductStrDescriptor,
+  USBD_MSC_SerialStrDescriptor,
+  USBD_MSC_ConfigStrDescriptor,
+  USBD_MSC_InterfaceStrDescriptor
+};
+
 #if defined ( __ICCARM__ ) /* IAR Compiler */
   #pragma data_alignment=4
 #endif /* defined ( __ICCARM__ ) */
@@ -155,9 +167,9 @@ __ALIGN_BEGIN uint8_t USBD_MSC_DeviceDesc[USB_LEN_DEV_DESC] __ALIGN_END =
   USB_DESC_TYPE_DEVICE,       /*bDescriptorType*/
   0x00,                       /*bcdUSB */
   0x02,
-  0x00,                       /*bDeviceClass*/
-  0x00,                       /*bDeviceSubClass*/
-  0x00,                       /*bDeviceProtocol*/
+  0xEF,                       /*bDeviceClass: Miscellaneous (for IAD)*/
+  0x02,                       /*bDeviceSubClass: Common Class*/
+  0x01,                       /*bDeviceProtocol: IAD*/
   USB_MAX_EP0_SIZE,           /*bMaxPacketSize*/
   LOBYTE(USBD_VID),           /*idVendor*/
   HIBYTE(USBD_VID),           /*idVendor*/

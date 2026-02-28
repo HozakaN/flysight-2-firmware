@@ -2,6 +2,11 @@
 .settings/
 .metadata/
 
+.DS_Store
+.vscode/*
+Deploy/
+Scripts/venv/*
+
 # Build folders
 Debug/
 Release/

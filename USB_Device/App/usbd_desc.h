@@ -110,6 +110,7 @@
   */
 
 extern USBD_DescriptorsTypeDef     MSC_Desc;
+extern USBD_DescriptorsTypeDef     Composite_Desc;
 
 /* USER CODE BEGIN EXPORTED_VARIABLES */
 

@@ -1,7 +1,7 @@
 /***************************************************************************
 **                                                                        **
 **  FlySight 2 firmware                                                   **
-**  Copyright 2023 Bionic Avionics Inc.                                   **
+**  Copyright 2024 Bionic Avionics Inc.                                   **
 **                                                                        **
 **  This program is free software: you can redistribute it and/or modify  **
 **  it under the terms of the GNU General Public License as published by  **
@@ -21,72 +21,39 @@
 **  Website: http://flysight.ca/                                          **
 ****************************************************************************/
 
-#include "main.h"
-#include "app_common.h"
-#include "cli.h"
-#include "resource_manager.h"
-#include "state.h"
-#include "usb_control.h"
-#include "usb_device.h"
-#include "usbd_core.h"
+#ifndef USBD_COMPOSITE_H_
+#define USBD_COMPOSITE_H_
 
-extern USBD_HandleTypeDef hUsbDeviceFS;
-extern UART_HandleTypeDef huart1;
+#ifdef __cplusplus
+extern "C" {
+#endif
 
-void FS_USBMode_Init(void)
-{
-	/* Initialize microSD */
-	FS_ResourceManager_RequestResource(FS_RESOURCE_MICROSD);
+#include "usbd_def.h"
 
-	/* Initialize controller */
-	FS_USBControl_Init();
+/* MSC endpoints (keep existing) */
+#define COMPOSITE_MSC_EPIN_ADDR    0x81U
+#define COMPOSITE_MSC_EPOUT_ADDR   0x01U
 
-	/* Algorithm to use USB on CPU1 comes from AN5289 Figure 9 */
+/* CDC endpoints (new) */
+#define COMPOSITE_CDC_IN_EP        0x82U
+#define COMPOSITE_CDC_OUT_EP       0x02U
+#define COMPOSITE_CDC_CMD_EP       0x83U
 
-	/* Configure peripheral clocks */
-	PeriphClock_Config();
+/* Interface numbers */
+#define COMPOSITE_MSC_INTERFACE       0
+#define COMPOSITE_CDC_CMD_INTERFACE   1
+#define COMPOSITE_CDC_DATA_INTERFACE  2
+#define COMPOSITE_NUM_INTERFACES      3
 
-	/* Enable USB interface */
-	MX_USB_Device_Init();
+/* Class IDs for pClassDataCmsit / pUserData indexing */
+#define COMPOSITE_MSC_CLASS_ID  0
+#define COMPOSITE_CDC_CLASS_ID  1
 
-	/* Initialize CLI over CDC */
-	FS_CLI_Init();
+extern USBD_ClassTypeDef USBD_Composite;
+extern USBD_DescriptorsTypeDef Composite_Desc;
+
+#ifdef __cplusplus
 }
+#endif
 
-void FS_USBMode_DeInit(void)
-{
-	/* De-initialize CLI */
-	FS_CLI_DeInit();
-
-	/* Disable controller */
-	FS_USBControl_DeInit();
-
-	/* Algorithm to use USB on CPU1 comes from AN5289 Figure 9 */
-
-	/* Disable USB interface */
-	if (USBD_DeInit(&hUsbDeviceFS) != USBD_OK)
-	{
-		Error_Handler();
-	}
-
-	/* Disable USB power */
-	HAL_PWREx_DisableVddUSB();
-
-	/* Get Sem0 */
-	LL_HSEM_1StepLock(HSEM, CFG_HW_RNG_SEMID);
-
-	/* Disable HSI48 */
-	LL_RCC_HSI48_Disable();
-
-	/* Release Sem0 */
-	LL_HSEM_ReleaseLock(HSEM, CFG_HW_RNG_SEMID, 0);
-
-	/* Release HSI48 semaphore */
-	LL_HSEM_ReleaseLock(HSEM, CFG_HW_CLK48_CONFIG_SEMID, 0);
-
-	/* De-initialize microSD */
-	FS_ResourceManager_ReleaseResource(FS_RESOURCE_MICROSD);
-
-	/* Update persistent state */
-	FS_State_Update();
-}
+#endif /* USBD_COMPOSITE_H_ */

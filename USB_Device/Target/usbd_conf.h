@@ -70,9 +70,11 @@
   */
 
 /*---------- -----------*/
-#define USBD_MAX_NUM_INTERFACES     1U
+#define USBD_MAX_NUM_INTERFACES     3U
 /*---------- -----------*/
 #define USBD_MAX_NUM_CONFIGURATION     1U
+/*---------- -----------*/
+#define USBD_MAX_SUPPORTED_CLASS    2U
 /*---------- -----------*/
 #define USBD_MAX_STR_DESC_SIZ     512U
 /*---------- -----------*/
@@ -83,6 +85,11 @@
 #define USBD_SELF_POWERED     1U
 /*---------- -----------*/
 #define MSC_MEDIA_PACKET     512U
+
+/* CDC endpoint overrides (avoid conflicts with MSC on 0x81/0x01) */
+#define CDC_IN_EP    0x82U
+#define CDC_OUT_EP   0x02U
+#define CDC_CMD_EP   0x83U
 
 /****************************************/
 /* #define for FS and HS identification */
