@@ -26,6 +26,9 @@
 #include "usbd_cdc.h"
 #include "usbd_desc.h"
 
+/* MSC enabled flag */
+static uint8_t msc_active = 0;
+
 /* Forward declarations */
 static uint8_t Composite_Init(USBD_HandleTypeDef *pdev, uint8_t cfgidx);
 static uint8_t Composite_DeInit(USBD_HandleTypeDef *pdev, uint8_t cfgidx);
@@ -56,27 +59,20 @@ USBD_ClassTypeDef USBD_Composite =
   Composite_GetDeviceQualifierDesc,
 };
 
-/*
- * Composite Configuration Descriptor:
- *   Config (9) + IAD (8) + CDC Comm IF (9) + CDC Func Descs (5+5+4+5=19)
- *   + CDC CMD EP (7) + CDC Data IF (9) + CDC Data EPs (7+7=14) + MSC IF (9) + MSC EPs (7+7=14)
- * Total = 9 + 8 + 9 + 19 + 7 + 9 + 14 + 9 + 14 = 98
- *
- * Note: MSC is placed FIRST in interface numbering (interface 0) but CDC IAD
- * is described first in the descriptor to ensure Windows picks up the IAD properly.
- * Actually, let's put MSC first in the descriptor as interface 0 for compatibility.
- */
+/*---------------------------------------------------------------------------*/
+/* MSC-Only Configuration Descriptor (32 bytes)                              */
+/*---------------------------------------------------------------------------*/
 
-#define COMPOSITE_CONFIG_DESC_SIZ  98U
+#define MSC_ONLY_CONFIG_DESC_SIZ  32U
 
-__ALIGN_BEGIN static uint8_t USBD_Composite_CfgDesc[COMPOSITE_CONFIG_DESC_SIZ] __ALIGN_END =
+__ALIGN_BEGIN static uint8_t USBD_MSC_Only_CfgDesc[MSC_ONLY_CONFIG_DESC_SIZ] __ALIGN_END =
 {
   /* Configuration Descriptor */
   0x09,                              /* bLength */
   USB_DESC_TYPE_CONFIGURATION,       /* bDescriptorType */
-  LOBYTE(COMPOSITE_CONFIG_DESC_SIZ), /* wTotalLength */
-  HIBYTE(COMPOSITE_CONFIG_DESC_SIZ),
-  COMPOSITE_NUM_INTERFACES,          /* bNumInterfaces: 3 */
+  LOBYTE(MSC_ONLY_CONFIG_DESC_SIZ),  /* wTotalLength */
+  HIBYTE(MSC_ONLY_CONFIG_DESC_SIZ),
+  MSC_ONLY_NUM_INTERFACES,           /* bNumInterfaces: 1 */
   0x01,                              /* bConfigurationValue */
   0x04,                              /* iConfiguration (string index) */
 #if (USBD_SELF_POWERED == 1U)
@@ -91,7 +87,7 @@ __ALIGN_BEGIN static uint8_t USBD_Composite_CfgDesc[COMPOSITE_CONFIG_DESC_SIZ] _
   /*---------------------------------------------------------------------------*/
   0x09,                              /* bLength */
   USB_DESC_TYPE_INTERFACE,           /* bDescriptorType */
-  COMPOSITE_MSC_INTERFACE,           /* bInterfaceNumber: 0 */
+  MSC_ONLY_INTERFACE,                /* bInterfaceNumber: 0 */
   0x00,                              /* bAlternateSetting */
   0x02,                              /* bNumEndpoints: 2 */
   0x08,                              /* bInterfaceClass: MSC */
@@ -116,13 +112,38 @@ __ALIGN_BEGIN static uint8_t USBD_Composite_CfgDesc[COMPOSITE_CONFIG_DESC_SIZ] _
   LOBYTE(MSC_MAX_FS_PACKET),         /* wMaxPacketSize: 64 */
   HIBYTE(MSC_MAX_FS_PACKET),
   0x00,                              /* bInterval */
+};
+
+/*---------------------------------------------------------------------------*/
+/* CDC-Only Configuration Descriptor (75 bytes)                              */
+/* CDC at interfaces 0 and 1; same endpoints as composite mode.              */
+/*---------------------------------------------------------------------------*/
+
+#define CDC_ONLY_CONFIG_DESC_SIZ  75U
+
+__ALIGN_BEGIN static uint8_t USBD_CDC_Only_CfgDesc[CDC_ONLY_CONFIG_DESC_SIZ] __ALIGN_END =
+{
+  /* Configuration Descriptor */
+  0x09,                              /* bLength */
+  USB_DESC_TYPE_CONFIGURATION,       /* bDescriptorType */
+  LOBYTE(CDC_ONLY_CONFIG_DESC_SIZ),  /* wTotalLength */
+  HIBYTE(CDC_ONLY_CONFIG_DESC_SIZ),
+  CDC_ONLY_NUM_INTERFACES,           /* bNumInterfaces: 2 */
+  0x01,                              /* bConfigurationValue */
+  0x04,                              /* iConfiguration (string index) */
+#if (USBD_SELF_POWERED == 1U)
+  0xC0,                              /* bmAttributes: Self Powered */
+#else
+  0x80,                              /* bmAttributes: Bus Powered */
+#endif
+  USBD_MAX_POWER,                    /* MaxPower (mA) */
 
   /*---------------------------------------------------------------------------*/
-  /* IAD for CDC (groups interfaces 1 and 2) */
+  /* IAD for CDC (groups interfaces 0 and 1) */
   /*---------------------------------------------------------------------------*/
   0x08,                              /* bLength: IAD Descriptor size */
   USB_DESC_TYPE_IAD,                 /* bDescriptorType: IAD (0x0B) */
-  COMPOSITE_CDC_CMD_INTERFACE,       /* bFirstInterface: 1 */
+  CDC_ONLY_CMD_INTERFACE,            /* bFirstInterface: 0 */
   0x02,                              /* bInterfaceCount: 2 */
   0x02,                              /* bFunctionClass: CDC */
   0x02,                              /* bFunctionSubClass: ACM */
@@ -130,11 +151,11 @@ __ALIGN_BEGIN static uint8_t USBD_Composite_CfgDesc[COMPOSITE_CONFIG_DESC_SIZ] _
   0x00,                              /* iFunction */
 
   /*---------------------------------------------------------------------------*/
-  /* CDC Communication Interface (Interface 1) */
+  /* CDC Communication Interface (Interface 0) */
   /*---------------------------------------------------------------------------*/
   0x09,                              /* bLength */
   USB_DESC_TYPE_INTERFACE,           /* bDescriptorType */
-  COMPOSITE_CDC_CMD_INTERFACE,       /* bInterfaceNumber: 1 */
+  CDC_ONLY_CMD_INTERFACE,            /* bInterfaceNumber: 0 */
   0x00,                              /* bAlternateSetting */
   0x01,                              /* bNumEndpoints: 1 (notification) */
   0x02,                              /* bInterfaceClass: CDC */
@@ -153,7 +174,7 @@ __ALIGN_BEGIN static uint8_t USBD_Composite_CfgDesc[COMPOSITE_CONFIG_DESC_SIZ] _
   0x24,                              /* bDescriptorType: CS_INTERFACE */
   0x01,                              /* bDescriptorSubtype: Call Management */
   0x00,                              /* bmCapabilities: D0+D1 */
-  COMPOSITE_CDC_DATA_INTERFACE,      /* bDataInterface: 2 */
+  CDC_ONLY_DATA_INTERFACE,           /* bDataInterface: 1 */
 
   /* CDC ACM Functional Descriptor */
   0x04,                              /* bLength */
@@ -165,8 +186,8 @@ __ALIGN_BEGIN static uint8_t USBD_Composite_CfgDesc[COMPOSITE_CONFIG_DESC_SIZ] _
   0x05,                              /* bLength */
   0x24,                              /* bDescriptorType: CS_INTERFACE */
   0x06,                              /* bDescriptorSubtype: Union */
-  COMPOSITE_CDC_CMD_INTERFACE,       /* bMasterInterface: 1 */
-  COMPOSITE_CDC_DATA_INTERFACE,      /* bSlaveInterface0: 2 */
+  CDC_ONLY_CMD_INTERFACE,            /* bMasterInterface: 0 */
+  CDC_ONLY_DATA_INTERFACE,           /* bSlaveInterface0: 1 */
 
   /* CDC Notification Endpoint (Interrupt IN) */
   0x07,                              /* bLength */
@@ -178,11 +199,11 @@ __ALIGN_BEGIN static uint8_t USBD_Composite_CfgDesc[COMPOSITE_CONFIG_DESC_SIZ] _
   CDC_FS_BINTERVAL,                  /* bInterval */
 
   /*---------------------------------------------------------------------------*/
-  /* CDC Data Interface (Interface 2) */
+  /* CDC Data Interface (Interface 1) */
   /*---------------------------------------------------------------------------*/
   0x09,                              /* bLength */
   USB_DESC_TYPE_INTERFACE,           /* bDescriptorType */
-  COMPOSITE_CDC_DATA_INTERFACE,      /* bInterfaceNumber: 2 */
+  CDC_ONLY_DATA_INTERFACE,           /* bInterfaceNumber: 1 */
   0x00,                              /* bAlternateSetting */
   0x02,                              /* bNumEndpoints: 2 */
   0x0A,                              /* bInterfaceClass: CDC Data */
@@ -224,31 +245,55 @@ __ALIGN_BEGIN static uint8_t USBD_Composite_DeviceQualifierDesc[USB_LEN_DEV_QUAL
 };
 
 /*---------------------------------------------------------------------------*/
+/* MSC enable/disable                                                        */
+/*---------------------------------------------------------------------------*/
+
+void USBD_Composite_SetMSCEnabled(uint8_t enabled)
+{
+  msc_active = enabled;
+}
+
+uint8_t USBD_Composite_IsMSCEnabled(void)
+{
+  return msc_active;
+}
+
+/*---------------------------------------------------------------------------*/
 /* Composite class callbacks                                                 */
 /*---------------------------------------------------------------------------*/
 
 static uint8_t Composite_Init(USBD_HandleTypeDef *pdev, uint8_t cfgidx)
 {
-  /* Initialize MSC */
-  pdev->classId = COMPOSITE_MSC_CLASS_ID;
-  USBD_MSC_Init(pdev, cfgidx);
-
-  /* Initialize CDC */
-  pdev->classId = COMPOSITE_CDC_CLASS_ID;
-  USBD_CDC.Init(pdev, cfgidx);
+  if (msc_active)
+  {
+    /* MSC-only mode */
+    pdev->classId = COMPOSITE_MSC_CLASS_ID;
+    USBD_MSC_Init(pdev, cfgidx);
+  }
+  else
+  {
+    /* CDC-only mode */
+    pdev->classId = COMPOSITE_CDC_CLASS_ID;
+    USBD_CDC.Init(pdev, cfgidx);
+  }
 
   return (uint8_t)USBD_OK;
 }
 
 static uint8_t Composite_DeInit(USBD_HandleTypeDef *pdev, uint8_t cfgidx)
 {
-  /* DeInit MSC */
-  pdev->classId = COMPOSITE_MSC_CLASS_ID;
-  USBD_MSC_DeInit(pdev, cfgidx);
-
-  /* DeInit CDC */
-  pdev->classId = COMPOSITE_CDC_CLASS_ID;
-  USBD_CDC.DeInit(pdev, cfgidx);
+  if (msc_active)
+  {
+    /* DeInit MSC */
+    pdev->classId = COMPOSITE_MSC_CLASS_ID;
+    USBD_MSC_DeInit(pdev, cfgidx);
+  }
+  else
+  {
+    /* DeInit CDC */
+    pdev->classId = COMPOSITE_CDC_CLASS_ID;
+    USBD_CDC.DeInit(pdev, cfgidx);
+  }
 
   return (uint8_t)USBD_OK;
 }
@@ -261,29 +306,39 @@ static uint8_t Composite_Setup(USBD_HandleTypeDef *pdev, USBD_SetupReqTypedef *r
   {
     uint16_t iface = req->wIndex & 0xFFU;
 
-    if (iface == COMPOSITE_MSC_INTERFACE)
+    if (msc_active)
     {
-      pdev->classId = COMPOSITE_MSC_CLASS_ID;
-      return USBD_MSC_Setup(pdev, req);
+      /* MSC-only mode: interface 0 = MSC */
+      if (iface == MSC_ONLY_INTERFACE)
+      {
+        pdev->classId = COMPOSITE_MSC_CLASS_ID;
+        return USBD_MSC_Setup(pdev, req);
+      }
     }
-    else if (iface == COMPOSITE_CDC_CMD_INTERFACE ||
-             iface == COMPOSITE_CDC_DATA_INTERFACE)
+    else
     {
-      pdev->classId = COMPOSITE_CDC_CLASS_ID;
-      return USBD_CDC.Setup(pdev, req);
+      /* CDC-only mode: interfaces 0,1 = CDC */
+      if (iface == CDC_ONLY_CMD_INTERFACE ||
+          iface == CDC_ONLY_DATA_INTERFACE)
+      {
+        pdev->classId = COMPOSITE_CDC_CLASS_ID;
+        return USBD_CDC.Setup(pdev, req);
+      }
     }
   }
   else if (recipient == USB_REQ_RECIPIENT_ENDPOINT)
   {
     uint8_t ep = req->wIndex & 0xFFU;
 
-    if (ep == COMPOSITE_MSC_EPIN_ADDR || ep == COMPOSITE_MSC_EPOUT_ADDR)
+    if (msc_active &&
+        (ep == COMPOSITE_MSC_EPIN_ADDR || ep == COMPOSITE_MSC_EPOUT_ADDR))
     {
       pdev->classId = COMPOSITE_MSC_CLASS_ID;
       return USBD_MSC_Setup(pdev, req);
     }
-    else if (ep == COMPOSITE_CDC_IN_EP || ep == COMPOSITE_CDC_OUT_EP ||
-             ep == COMPOSITE_CDC_CMD_EP)
+    else if (!msc_active &&
+             (ep == COMPOSITE_CDC_IN_EP || ep == COMPOSITE_CDC_OUT_EP ||
+              ep == COMPOSITE_CDC_CMD_EP))
     {
       pdev->classId = COMPOSITE_CDC_CLASS_ID;
       return USBD_CDC.Setup(pdev, req);
@@ -295,24 +350,28 @@ static uint8_t Composite_Setup(USBD_HandleTypeDef *pdev, USBD_SetupReqTypedef *r
 
 static uint8_t Composite_EP0_RxReady(USBD_HandleTypeDef *pdev)
 {
-  /* CDC needs EP0 RxReady for SET_LINE_CODING etc. */
-  pdev->classId = COMPOSITE_CDC_CLASS_ID;
-  if (USBD_CDC.EP0_RxReady != NULL)
+  if (!msc_active)
   {
-    return USBD_CDC.EP0_RxReady(pdev);
+    /* CDC needs EP0 RxReady for SET_LINE_CODING etc. */
+    pdev->classId = COMPOSITE_CDC_CLASS_ID;
+    if (USBD_CDC.EP0_RxReady != NULL)
+    {
+      return USBD_CDC.EP0_RxReady(pdev);
+    }
   }
   return (uint8_t)USBD_OK;
 }
 
 static uint8_t Composite_DataIn(USBD_HandleTypeDef *pdev, uint8_t epnum)
 {
-  if (epnum == (COMPOSITE_MSC_EPIN_ADDR & 0x7FU))
+  if (msc_active && epnum == (COMPOSITE_MSC_EPIN_ADDR & 0x7FU))
   {
     pdev->classId = COMPOSITE_MSC_CLASS_ID;
     return USBD_MSC_DataIn(pdev, epnum);
   }
-  else if (epnum == (COMPOSITE_CDC_IN_EP & 0x7FU) ||
-           epnum == (COMPOSITE_CDC_CMD_EP & 0x7FU))
+  else if (!msc_active &&
+           (epnum == (COMPOSITE_CDC_IN_EP & 0x7FU) ||
+            epnum == (COMPOSITE_CDC_CMD_EP & 0x7FU)))
   {
     pdev->classId = COMPOSITE_CDC_CLASS_ID;
     return USBD_CDC.DataIn(pdev, epnum);
@@ -322,12 +381,12 @@ static uint8_t Composite_DataIn(USBD_HandleTypeDef *pdev, uint8_t epnum)
 
 static uint8_t Composite_DataOut(USBD_HandleTypeDef *pdev, uint8_t epnum)
 {
-  if (epnum == (COMPOSITE_MSC_EPOUT_ADDR & 0x7FU))
+  if (msc_active && epnum == (COMPOSITE_MSC_EPOUT_ADDR & 0x7FU))
   {
     pdev->classId = COMPOSITE_MSC_CLASS_ID;
     return USBD_MSC_DataOut(pdev, epnum);
   }
-  else if (epnum == (COMPOSITE_CDC_OUT_EP & 0x7FU))
+  else if (!msc_active && epnum == (COMPOSITE_CDC_OUT_EP & 0x7FU))
   {
     pdev->classId = COMPOSITE_CDC_CLASS_ID;
     return USBD_CDC.DataOut(pdev, epnum);
@@ -337,20 +396,44 @@ static uint8_t Composite_DataOut(USBD_HandleTypeDef *pdev, uint8_t epnum)
 
 static uint8_t *Composite_GetFSCfgDesc(uint16_t *length)
 {
-  *length = (uint16_t)sizeof(USBD_Composite_CfgDesc);
-  return USBD_Composite_CfgDesc;
+  if (msc_active)
+  {
+    *length = (uint16_t)sizeof(USBD_MSC_Only_CfgDesc);
+    return USBD_MSC_Only_CfgDesc;
+  }
+  else
+  {
+    *length = (uint16_t)sizeof(USBD_CDC_Only_CfgDesc);
+    return USBD_CDC_Only_CfgDesc;
+  }
 }
 
 static uint8_t *Composite_GetHSCfgDesc(uint16_t *length)
 {
-  *length = (uint16_t)sizeof(USBD_Composite_CfgDesc);
-  return USBD_Composite_CfgDesc;
+  if (msc_active)
+  {
+    *length = (uint16_t)sizeof(USBD_MSC_Only_CfgDesc);
+    return USBD_MSC_Only_CfgDesc;
+  }
+  else
+  {
+    *length = (uint16_t)sizeof(USBD_CDC_Only_CfgDesc);
+    return USBD_CDC_Only_CfgDesc;
+  }
 }
 
 static uint8_t *Composite_GetOtherSpeedCfgDesc(uint16_t *length)
 {
-  *length = (uint16_t)sizeof(USBD_Composite_CfgDesc);
-  return USBD_Composite_CfgDesc;
+  if (msc_active)
+  {
+    *length = (uint16_t)sizeof(USBD_MSC_Only_CfgDesc);
+    return USBD_MSC_Only_CfgDesc;
+  }
+  else
+  {
+    *length = (uint16_t)sizeof(USBD_CDC_Only_CfgDesc);
+    return USBD_CDC_Only_CfgDesc;
+  }
 }
 
 static uint8_t *Composite_GetDeviceQualifierDesc(uint16_t *length)

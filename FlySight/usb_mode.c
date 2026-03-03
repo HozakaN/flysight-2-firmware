@@ -28,15 +28,31 @@
 #include "state.h"
 #include "usb_control.h"
 #include "usb_device.h"
+#include "usbd_composite.h"
 #include "usbd_core.h"
 
 extern USBD_HandleTypeDef hUsbDeviceFS;
 extern UART_HandleTypeDef huart1;
 
+static uint8_t msc_enabled = 0;
+
 void FS_USBMode_Init(void)
 {
-	/* Initialize microSD */
-	FS_ResourceManager_RequestResource(FS_RESOURCE_MICROSD);
+	msc_enabled = 0;
+
+	/* Check persistent state for CLI mode */
+	if (!FS_State_Get()->competition_mode)
+	{
+		/* MSC-only mode: claim microSD for mass storage */
+		FS_ResourceManager_RequestResource(FS_RESOURCE_MICROSD);
+		USBD_Composite_SetMSCEnabled(1);
+		msc_enabled = 1;
+	}
+	else
+	{
+		/* CDC-only mode: leave microSD free for BLE file access */
+		USBD_Composite_SetMSCEnabled(0);
+	}
 
 	/* Initialize controller */
 	FS_USBControl_Init();
@@ -49,14 +65,20 @@ void FS_USBMode_Init(void)
 	/* Enable USB interface */
 	MX_USB_Device_Init();
 
-	/* Initialize CLI over CDC */
-	FS_CLI_Init();
+	/* Initialize CLI only in CDC-only mode */
+	if (!msc_enabled)
+	{
+		FS_CLI_Init();
+	}
 }
 
 void FS_USBMode_DeInit(void)
 {
-	/* De-initialize CLI */
-	FS_CLI_DeInit();
+	/* De-initialize CLI if it was active */
+	if (!msc_enabled)
+	{
+		FS_CLI_DeInit();
+	}
 
 	/* Disable controller */
 	FS_USBControl_DeInit();
@@ -84,8 +106,12 @@ void FS_USBMode_DeInit(void)
 	/* Release HSI48 semaphore */
 	LL_HSEM_ReleaseLock(HSEM, CFG_HW_CLK48_CONFIG_SEMID, 0);
 
-	/* De-initialize microSD */
-	FS_ResourceManager_ReleaseResource(FS_RESOURCE_MICROSD);
+	/* Release microSD if MSC was active */
+	if (msc_enabled)
+	{
+		FS_ResourceManager_ReleaseResource(FS_RESOURCE_MICROSD);
+		msc_enabled = 0;
+	}
 
 	/* Update persistent state */
 	FS_State_Update();

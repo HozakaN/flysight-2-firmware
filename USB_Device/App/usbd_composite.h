@@ -39,11 +39,14 @@ extern "C" {
 #define COMPOSITE_CDC_OUT_EP       0x02U
 #define COMPOSITE_CDC_CMD_EP       0x83U
 
-/* Interface numbers */
-#define COMPOSITE_MSC_INTERFACE       0
-#define COMPOSITE_CDC_CMD_INTERFACE   1
-#define COMPOSITE_CDC_DATA_INTERFACE  2
-#define COMPOSITE_NUM_INTERFACES      3
+/* Interface numbers (MSC-only mode) */
+#define MSC_ONLY_INTERFACE            0
+#define MSC_ONLY_NUM_INTERFACES       1
+
+/* Interface numbers (CDC-only mode) */
+#define CDC_ONLY_CMD_INTERFACE        0
+#define CDC_ONLY_DATA_INTERFACE       1
+#define CDC_ONLY_NUM_INTERFACES       2
 
 /* Class IDs for pClassDataCmsit / pUserData indexing */
 #define COMPOSITE_MSC_CLASS_ID  0
@@ -51,6 +54,9 @@ extern "C" {
 
 extern USBD_ClassTypeDef USBD_Composite;
 extern USBD_DescriptorsTypeDef Composite_Desc;
+
+void USBD_Composite_SetMSCEnabled(uint8_t enabled);
+uint8_t USBD_Composite_IsMSCEnabled(void);
 
 #ifdef __cplusplus
 }

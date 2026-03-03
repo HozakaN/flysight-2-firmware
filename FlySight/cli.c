@@ -23,19 +23,33 @@
 
 #include <string.h>
 #include <stdio.h>
+#include <ctype.h>
 
 #include "cli.h"
 #include "app_ble.h"
 #include "app_common.h"
+#include "ff.h"
 #include "mode.h"
+#include "resource_manager.h"
 #include "state.h"
 #include "stm32_seq.h"
 #include "usbd_cdc_if.h"
+#include "usbd_composite.h"
 #include "version.h"
 
 #define CLI_RX_BUF_SIZE   256
 #define CLI_CMD_MAX_LEN   128
 #define CLI_TX_BUF_SIZE   256
+#define CLI_PATH_MAX      64
+
+#define CLI_EOF_CHAR      0x04  /* Ctrl-D */
+
+/* CLI modes */
+typedef enum
+{
+	CLI_MODE_COMMAND,
+	CLI_MODE_FILE_WRITE
+} CLI_Mode_t;
 
 /* Ring buffer for USB -> CLI data */
 static uint8_t rx_buf[CLI_RX_BUF_SIZE];
@@ -46,11 +60,20 @@ static volatile uint16_t rx_tail;
 static char cmd_buf[CLI_CMD_MAX_LEN];
 static uint16_t cmd_len;
 
-/* Transmit buffer */
+/* Transmit buffer (also used for file chunk reads) */
 static char tx_buf[CLI_TX_BUF_SIZE];
+
+/* Path buffer for file operations */
+static char path_buf[CLI_PATH_MAX];
+
+/* File write state */
+static CLI_Mode_t cli_mode;
+static FIL write_file;
+static uint32_t write_total;
 
 static void FS_CLI_ProcessTask(void);
 static void FS_CLI_Send(const char *str);
+static void FS_CLI_SendBuf(const char *buf, uint16_t len);
 static void FS_CLI_Execute(const char *cmd);
 
 void FS_CLI_Init(void)
@@ -58,6 +81,7 @@ void FS_CLI_Init(void)
 	rx_head = 0;
 	rx_tail = 0;
 	cmd_len = 0;
+	cli_mode = CLI_MODE_COMMAND;
 
 	UTIL_SEQ_RegTask(1 << CFG_TASK_FS_CLI_UPDATE_ID, UTIL_SEQ_RFU, FS_CLI_ProcessTask);
 
@@ -66,6 +90,14 @@ void FS_CLI_Init(void)
 
 void FS_CLI_DeInit(void)
 {
+	/* Close any open write file */
+	if (cli_mode == CLI_MODE_FILE_WRITE)
+	{
+		f_close(&write_file);
+		FS_ResourceManager_ReleaseResource(FS_RESOURCE_FATFS);
+		cli_mode = CLI_MODE_COMMAND;
+	}
+
 	rx_head = 0;
 	rx_tail = 0;
 	cmd_len = 0;
@@ -91,10 +123,91 @@ static void FS_CLI_Send(const char *str)
 	uint16_t len = (uint16_t)strlen(str);
 	if (len > 0)
 	{
-		/* CDC_Transmit_FS may return BUSY if a previous transmission
-		 * is still in progress. For a simple CLI this is acceptable —
-		 * worst case some output is dropped. */
-		CDC_Transmit_FS((uint8_t *)str, len);
+		uint32_t retry = 0;
+		while (CDC_Transmit_FS((uint8_t *)str, len) == USBD_BUSY)
+		{
+			if (++retry > 10000U)
+				break;  /* Give up after ~10ms to avoid hanging */
+		}
+	}
+}
+
+static void FS_CLI_SendBuf(const char *buf, uint16_t len)
+{
+	if (len > 0)
+	{
+		uint32_t retry = 0;
+		while (CDC_Transmit_FS((uint8_t *)buf, len) == USBD_BUSY)
+		{
+			if (++retry > 10000U)
+				break;
+		}
+	}
+}
+
+/*---------------------------------------------------------------------------*/
+/* File write mode handler                                                   */
+/*---------------------------------------------------------------------------*/
+
+static void FS_CLI_ProcessFileWrite(uint8_t ch)
+{
+	UINT bw;
+
+	if (ch == CLI_EOF_CHAR)
+	{
+		/* End of file transfer */
+		f_close(&write_file);
+		FS_ResourceManager_ReleaseResource(FS_RESOURCE_FATFS);
+
+		snprintf(tx_buf, sizeof(tx_buf), "OK: Written %lu bytes\r\n", write_total);
+		FS_CLI_Send(tx_buf);
+
+		cli_mode = CLI_MODE_COMMAND;
+		FS_CLI_Send("> ");
+		return;
+	}
+
+	/* Write byte to file */
+	if (f_write(&write_file, &ch, 1, &bw) == FR_OK)
+	{
+		write_total += bw;
+	}
+}
+
+/*---------------------------------------------------------------------------*/
+/* Command mode handler                                                      */
+/*---------------------------------------------------------------------------*/
+
+static void FS_CLI_ProcessCommand(uint8_t ch)
+{
+	if (ch == '\r' || ch == '\n')
+	{
+		if (cmd_len > 0)
+		{
+			cmd_buf[cmd_len] = '\0';
+			FS_CLI_Send("\r\n");
+			FS_CLI_Execute(cmd_buf);
+			cmd_len = 0;
+			if (cli_mode == CLI_MODE_COMMAND)
+			{
+				FS_CLI_Send("> ");
+			}
+		}
+	}
+	else if (ch == 0x7F || ch == '\b')
+	{
+		if (cmd_len > 0)
+		{
+			cmd_len--;
+			FS_CLI_Send("\b \b");
+		}
+	}
+	else if (ch >= 0x20 && cmd_len < CLI_CMD_MAX_LEN - 1)
+	{
+		cmd_buf[cmd_len++] = (char)ch;
+		/* Echo character back */
+		char echo[2] = {(char)ch, '\0'};
+		FS_CLI_Send(echo);
 	}
 }
 
@@ -105,34 +218,379 @@ static void FS_CLI_ProcessTask(void)
 		uint8_t ch = rx_buf[rx_tail];
 		rx_tail = (rx_tail + 1) % CLI_RX_BUF_SIZE;
 
-		if (ch == '\r' || ch == '\n')
+		if (cli_mode == CLI_MODE_FILE_WRITE)
 		{
-			if (cmd_len > 0)
-			{
-				cmd_buf[cmd_len] = '\0';
-				FS_CLI_Send("\r\n");
-				FS_CLI_Execute(cmd_buf);
-				cmd_len = 0;
-				FS_CLI_Send("> ");
-			}
+			FS_CLI_ProcessFileWrite(ch);
 		}
-		else if (ch == 0x7F || ch == '\b')
+		else
 		{
-			if (cmd_len > 0)
-			{
-				cmd_len--;
-				FS_CLI_Send("\b \b");
-			}
-		}
-		else if (ch >= 0x20 && cmd_len < CLI_CMD_MAX_LEN - 1)
-		{
-			cmd_buf[cmd_len++] = (char)ch;
-			/* Echo character back */
-			char echo[2] = {(char)ch, '\0'};
-			FS_CLI_Send(echo);
+			FS_CLI_ProcessCommand(ch);
 		}
 	}
 }
+
+/*---------------------------------------------------------------------------*/
+/* File access helpers                                                       */
+/*---------------------------------------------------------------------------*/
+
+static uint8_t FS_CLI_CheckFileAccess(void)
+{
+	if (USBD_Composite_IsMSCEnabled())
+	{
+		FS_CLI_Send("ERROR: File access requires Competition_Mode: 1 in flysight.txt\r\n");
+		return 0;
+	}
+	return 1;
+}
+
+/* Check if name matches YY-MM-DD or HH-MM-SS pattern */
+static uint8_t FS_CLI_IsDateTimeFolder(const char *name)
+{
+	if (strlen(name) != 8) return 0;
+	if (!isdigit((unsigned char)name[0])) return 0;
+	if (!isdigit((unsigned char)name[1])) return 0;
+	if (name[2] != '-') return 0;
+	if (!isdigit((unsigned char)name[3])) return 0;
+	if (!isdigit((unsigned char)name[4])) return 0;
+	if (name[5] != '-') return 0;
+	if (!isdigit((unsigned char)name[6])) return 0;
+	if (!isdigit((unsigned char)name[7])) return 0;
+	return 1;
+}
+
+static void FS_CLI_SendFileContents(const char *path)
+{
+	FIL file;
+	UINT br;
+
+	if (f_open(&file, path, FA_READ) != FR_OK)
+	{
+		snprintf(tx_buf, sizeof(tx_buf), "ERROR: Cannot open %s\r\n", path);
+		FS_CLI_Send(tx_buf);
+		return;
+	}
+
+	while (f_read(&file, tx_buf, sizeof(tx_buf) - 1, &br) == FR_OK && br > 0)
+	{
+		FS_CLI_SendBuf(tx_buf, (uint16_t)br);
+	}
+
+	f_close(&file);
+}
+
+static void FS_CLI_ReadFile(const char *path)
+{
+	if (!FS_CLI_CheckFileAccess()) return;
+
+	if (FS_ResourceManager_RequestResource(FS_RESOURCE_FATFS) != FS_RESOURCE_MANAGER_SUCCESS)
+	{
+		FS_CLI_Send("ERROR: Cannot access filesystem.\r\n");
+		return;
+	}
+
+	snprintf(tx_buf, sizeof(tx_buf), "=== %s ===\r\n", path);
+	FS_CLI_Send(tx_buf);
+
+	FS_CLI_SendFileContents(path);
+
+	FS_CLI_Send("\r\n=== END ===\r\n");
+
+	FS_ResourceManager_ReleaseResource(FS_RESOURCE_FATFS);
+}
+
+static void FS_CLI_WriteFile(const char *path)
+{
+	if (!FS_CLI_CheckFileAccess()) return;
+
+	if (FS_ResourceManager_RequestResource(FS_RESOURCE_FATFS) != FS_RESOURCE_MANAGER_SUCCESS)
+	{
+		FS_CLI_Send("ERROR: Cannot access filesystem.\r\n");
+		return;
+	}
+
+	if (f_open(&write_file, path, FA_WRITE | FA_CREATE_ALWAYS) != FR_OK)
+	{
+		snprintf(tx_buf, sizeof(tx_buf), "ERROR: Cannot open %s for writing.\r\n", path);
+		FS_CLI_Send(tx_buf);
+		FS_ResourceManager_ReleaseResource(FS_RESOURCE_FATFS);
+		return;
+	}
+
+	write_total = 0;
+	cli_mode = CLI_MODE_FILE_WRITE;
+	FS_CLI_Send("READY\r\n");
+}
+
+static uint8_t FS_CLI_FindLatestTrack(char *out_path, uint16_t max_len)
+{
+	DIR dir;
+	FILINFO fno;
+	char best_date[9] = {0};
+	char best_time[9] = {0};
+
+	/* Scan root for date folders */
+	if (f_opendir(&dir, "/") != FR_OK) return 0;
+
+	while (f_readdir(&dir, &fno) == FR_OK && fno.fname[0] != '\0')
+	{
+		if ((fno.fattrib & AM_DIR) && FS_CLI_IsDateTimeFolder(fno.fname))
+		{
+			if (strcmp(fno.fname, best_date) > 0)
+			{
+				strncpy(best_date, fno.fname, sizeof(best_date) - 1);
+			}
+		}
+	}
+	f_closedir(&dir);
+
+	if (best_date[0] == '\0') return 0;
+
+	/* Scan inside the latest date folder for time folders */
+	snprintf(path_buf, sizeof(path_buf), "/%s", best_date);
+	if (f_opendir(&dir, path_buf) != FR_OK) return 0;
+
+	while (f_readdir(&dir, &fno) == FR_OK && fno.fname[0] != '\0')
+	{
+		if ((fno.fattrib & AM_DIR) && FS_CLI_IsDateTimeFolder(fno.fname))
+		{
+			if (strcmp(fno.fname, best_time) > 0)
+			{
+				strncpy(best_time, fno.fname, sizeof(best_time) - 1);
+			}
+		}
+	}
+	f_closedir(&dir);
+
+	if (best_time[0] == '\0') return 0;
+
+	snprintf(out_path, max_len, "/%s/%s", best_date, best_time);
+	return 1;
+}
+
+/*---------------------------------------------------------------------------*/
+/* Command implementations                                                   */
+/*---------------------------------------------------------------------------*/
+
+static void FS_CLI_CmdTrackLatest(void)
+{
+	DIR dir;
+	FILINFO fno;
+	char track_path[CLI_PATH_MAX];
+	char file_path[CLI_PATH_MAX + 14]; /* room for track_path + '/' + 8.3 name */
+
+	if (!FS_CLI_CheckFileAccess()) return;
+
+	if (FS_ResourceManager_RequestResource(FS_RESOURCE_FATFS) != FS_RESOURCE_MANAGER_SUCCESS)
+	{
+		FS_CLI_Send("ERROR: Cannot access filesystem.\r\n");
+		return;
+	}
+
+	if (!FS_CLI_FindLatestTrack(track_path, sizeof(track_path)))
+	{
+		FS_CLI_Send("No track found.\r\n");
+		FS_ResourceManager_ReleaseResource(FS_RESOURCE_FATFS);
+		return;
+	}
+
+	snprintf(tx_buf, sizeof(tx_buf), "Latest track: %s\r\n", track_path);
+	FS_CLI_Send(tx_buf);
+
+	/* Open the track directory and send all files */
+	if (f_opendir(&dir, track_path) != FR_OK)
+	{
+		FS_CLI_Send("ERROR: Cannot open track directory.\r\n");
+		FS_ResourceManager_ReleaseResource(FS_RESOURCE_FATFS);
+		return;
+	}
+
+	while (f_readdir(&dir, &fno) == FR_OK && fno.fname[0] != '\0')
+	{
+		if (fno.fattrib & AM_DIR) continue;  /* Skip subdirectories */
+
+		snprintf(file_path, sizeof(file_path), "%s/%s", track_path, fno.fname);
+
+		/* Skip binary files */
+		if (strcmp(fno.fname, "raw.ubx") == 0)
+		{
+			snprintf(tx_buf, sizeof(tx_buf), "=== %s === (binary, skipped)\r\n", file_path);
+			FS_CLI_Send(tx_buf);
+			continue;
+		}
+
+		snprintf(tx_buf, sizeof(tx_buf), "=== %s ===\r\n", file_path);
+		FS_CLI_Send(tx_buf);
+
+		FS_CLI_SendFileContents(file_path);
+		FS_CLI_Send("\r\n");
+	}
+
+	f_closedir(&dir);
+
+	FS_CLI_Send("=== END ===\r\n");
+
+	FS_ResourceManager_ReleaseResource(FS_RESOURCE_FATFS);
+}
+
+static void FS_CLI_CmdMSC(void)
+{
+	FS_State_SetCompetitionMode(0);
+	FS_State_Save();
+	FS_CLI_Send("Competition mode disabled. Unplug and replug USB for mass storage.\r\n");
+}
+
+static FRESULT FS_CLI_DeleteNode(TCHAR *path, UINT sz_buff, FILINFO *fno)
+{
+	UINT i, j;
+	FRESULT fr;
+	DIR dir;
+
+	fr = f_opendir(&dir, path);
+	if (fr != FR_OK) return fr;
+
+	for (i = 0; path[i]; i++) ;
+	path[i++] = '/';
+
+	for (;;)
+	{
+		fr = f_readdir(&dir, fno);
+		if (fr != FR_OK || !fno->fname[0]) break;
+		j = 0;
+		do
+		{
+			if (i + j >= sz_buff) { fr = (FRESULT)100; break; }
+			path[i + j] = fno->fname[j];
+		} while (fno->fname[j++]);
+		if (fno->fattrib & AM_DIR)
+			fr = FS_CLI_DeleteNode(path, sz_buff, fno);
+		else
+			fr = f_unlink(path);
+		if (fr != FR_OK) break;
+	}
+
+	path[--i] = 0;
+	f_closedir(&dir);
+
+	if (fr == FR_OK) fr = f_unlink(path);
+	return fr;
+}
+
+static void FS_CLI_CmdTempList(void)
+{
+	DIR dir, subdir;
+	FILINFO fno;
+
+	if (!FS_CLI_CheckFileAccess()) return;
+
+	if (FS_ResourceManager_RequestResource(FS_RESOURCE_FATFS) != FS_RESOURCE_MANAGER_SUCCESS)
+	{
+		FS_CLI_Send("ERROR: Cannot access filesystem.\r\n");
+		return;
+	}
+
+	if (f_opendir(&dir, "/temp") != FR_OK)
+	{
+		FS_CLI_Send("No /temp folder found.\r\n");
+		FS_ResourceManager_ReleaseResource(FS_RESOURCE_FATFS);
+		return;
+	}
+
+	uint16_t count = 0;
+	while (f_readdir(&dir, &fno) == FR_OK && fno.fname[0] != '\0')
+	{
+		if (fno.fattrib & AM_DIR)
+		{
+			snprintf(tx_buf, sizeof(tx_buf), "%s/\r\n", fno.fname);
+			FS_CLI_Send(tx_buf);
+
+			snprintf(path_buf, sizeof(path_buf), "/temp/%s", fno.fname);
+			if (f_opendir(&subdir, path_buf) == FR_OK)
+			{
+				FILINFO sfno;
+				while (f_readdir(&subdir, &sfno) == FR_OK && sfno.fname[0] != '\0')
+				{
+					snprintf(tx_buf, sizeof(tx_buf), "  %s (%lu bytes)\r\n",
+						sfno.fname, (unsigned long)sfno.fsize);
+					FS_CLI_Send(tx_buf);
+				}
+				f_closedir(&subdir);
+			}
+		}
+		else
+		{
+			snprintf(tx_buf, sizeof(tx_buf), "%s (%lu bytes)\r\n",
+				fno.fname, (unsigned long)fno.fsize);
+			FS_CLI_Send(tx_buf);
+		}
+		count++;
+	}
+
+	f_closedir(&dir);
+
+	if (count == 0)
+	{
+		FS_CLI_Send("(empty)\r\n");
+	}
+
+	FS_ResourceManager_ReleaseResource(FS_RESOURCE_FATFS);
+}
+
+static void FS_CLI_CmdTempDelete(void)
+{
+	DIR dir;
+	FILINFO fno;
+	TCHAR del_path[CLI_PATH_MAX];
+
+	if (!FS_CLI_CheckFileAccess()) return;
+
+	if (FS_ResourceManager_RequestResource(FS_RESOURCE_FATFS) != FS_RESOURCE_MANAGER_SUCCESS)
+	{
+		FS_CLI_Send("ERROR: Cannot access filesystem.\r\n");
+		return;
+	}
+
+	if (f_opendir(&dir, "/temp") != FR_OK)
+	{
+		FS_CLI_Send("No /temp folder found.\r\n");
+		FS_ResourceManager_ReleaseResource(FS_RESOURCE_FATFS);
+		return;
+	}
+
+	uint16_t count = 0;
+	FRESULT fr = FR_OK;
+
+	while (f_readdir(&dir, &fno) == FR_OK && fno.fname[0] != '\0')
+	{
+		snprintf(del_path, sizeof(del_path), "/temp/%s", fno.fname);
+
+		if (fno.fattrib & AM_DIR)
+			fr = FS_CLI_DeleteNode(del_path, sizeof(del_path), &fno);
+		else
+			fr = f_unlink(del_path);
+
+		if (fr != FR_OK)
+		{
+			snprintf(tx_buf, sizeof(tx_buf), "ERROR: Failed to delete %s\r\n", del_path);
+			FS_CLI_Send(tx_buf);
+			break;
+		}
+		count++;
+	}
+
+	f_closedir(&dir);
+
+	if (fr == FR_OK)
+	{
+		snprintf(tx_buf, sizeof(tx_buf), "Deleted %u item(s) from /temp\r\n", count);
+		FS_CLI_Send(tx_buf);
+	}
+
+	FS_ResourceManager_ReleaseResource(FS_RESOURCE_FATFS);
+}
+
+/*---------------------------------------------------------------------------*/
+/* Command dispatcher                                                        */
+/*---------------------------------------------------------------------------*/
 
 static void FS_CLI_Execute(const char *cmd)
 {
@@ -140,11 +598,19 @@ static void FS_CLI_Execute(const char *cmd)
 	{
 		FS_CLI_Send(
 			"Available commands:\r\n"
-			"  pair start  - Start BLE pairing mode\r\n"
-			"  pair stop   - Stop BLE pairing mode\r\n"
-			"  status      - Show device mode and BLE state\r\n"
-			"  version     - Show firmware version\r\n"
-			"  help        - Show this help\r\n"
+			"  pair start      - Start BLE pairing mode\r\n"
+			"  pair stop       - Stop BLE pairing mode\r\n"
+			"  status          - Show device mode and BLE state\r\n"
+			"  track latest    - Show all files from latest track\r\n"
+			"  flysight read   - Show flysight.txt (device state)\r\n"
+			"  flysight write  - Write flysight.txt (end with Ctrl-D)\r\n"
+			"  config read     - Show config.txt (logging config)\r\n"
+			"  config write    - Write config.txt (end with Ctrl-D)\r\n"
+			"  temp list       - List contents of /temp folder\r\n"
+			"  temp delete     - Delete all contents of /temp folder\r\n"
+			"  msc             - Enable mass storage on next USB replug\r\n"
+			"  version         - Show firmware version\r\n"
+			"  help            - Show this help\r\n"
 		);
 	}
 	else if (strcmp(cmd, "pair start") == 0)
@@ -181,6 +647,38 @@ static void FS_CLI_Execute(const char *cmd)
 			FS_State_Get()->enable_ble ? "enabled" : "disabled",
 			ble_state_names[ble_st]);
 		FS_CLI_Send(tx_buf);
+	}
+	else if (strcmp(cmd, "track latest") == 0)
+	{
+		FS_CLI_CmdTrackLatest();
+	}
+	else if (strcmp(cmd, "flysight read") == 0)
+	{
+		FS_CLI_ReadFile("/flysight.txt");
+	}
+	else if (strcmp(cmd, "flysight write") == 0)
+	{
+		FS_CLI_WriteFile("/flysight.txt");
+	}
+	else if (strcmp(cmd, "config read") == 0)
+	{
+		FS_CLI_ReadFile("/config.txt");
+	}
+	else if (strcmp(cmd, "config write") == 0)
+	{
+		FS_CLI_WriteFile("/config.txt");
+	}
+	else if (strcmp(cmd, "temp list") == 0)
+	{
+		FS_CLI_CmdTempList();
+	}
+	else if (strcmp(cmd, "temp delete") == 0)
+	{
+		FS_CLI_CmdTempDelete();
+	}
+	else if (strcmp(cmd, "msc") == 0)
+	{
+		FS_CLI_CmdMSC();
 	}
 	else if (strcmp(cmd, "version") == 0)
 	{

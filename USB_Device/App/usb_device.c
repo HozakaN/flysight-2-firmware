@@ -76,7 +76,10 @@ void MX_USB_Device_Init(void)
 
   /* USER CODE END USB_Device_Init_PreTreatment */
 
-  /* Init Device Library with composite class (MSC + CDC). */
+  /* Reset static allocator for clean init */
+  USBD_static_malloc_reset();
+
+  /* Init Device Library with composite class. */
   if (USBD_Init(&hUsbDeviceFS, &Composite_Desc, DEVICE_FS) != USBD_OK) {
     Error_Handler();
   }
@@ -84,16 +87,22 @@ void MX_USB_Device_Init(void)
     Error_Handler();
   }
 
-  /* Register MSC storage interface (classId = 0) */
-  hUsbDeviceFS.classId = COMPOSITE_MSC_CLASS_ID;
-  if (USBD_MSC_RegisterStorage(&hUsbDeviceFS, &USBD_Storage_Interface_fops_FS) != USBD_OK) {
-    Error_Handler();
+  /* Register MSC storage interface only when MSC is enabled */
+  if (USBD_Composite_IsMSCEnabled())
+  {
+    hUsbDeviceFS.classId = COMPOSITE_MSC_CLASS_ID;
+    if (USBD_MSC_RegisterStorage(&hUsbDeviceFS, &USBD_Storage_Interface_fops_FS) != USBD_OK) {
+      Error_Handler();
+    }
   }
 
-  /* Register CDC interface (classId = 1) */
-  hUsbDeviceFS.classId = COMPOSITE_CDC_CLASS_ID;
-  if (USBD_CDC_RegisterInterface(&hUsbDeviceFS, &USBD_CDC_fops) != USBD_OK) {
-    Error_Handler();
+  /* Register CDC interface only in CDC-only mode */
+  if (!USBD_Composite_IsMSCEnabled())
+  {
+    hUsbDeviceFS.classId = COMPOSITE_CDC_CLASS_ID;
+    if (USBD_CDC_RegisterInterface(&hUsbDeviceFS, &USBD_CDC_fops) != USBD_OK) {
+      Error_Handler();
+    }
   }
 
   if (USBD_Start(&hUsbDeviceFS) != USBD_OK) {

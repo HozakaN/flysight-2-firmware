@@ -771,28 +771,35 @@ void USBD_LL_Delay(uint32_t Delay)
   * @param  size: Size of allocated memory
   * @retval None
   */
+static uint8_t alloc_idx = 0U;
+
+void USBD_static_malloc_reset(void)
+{
+  alloc_idx = 0U;
+}
+
 void *USBD_static_malloc(uint32_t size)
 {
   /*
    * Two static buffers for the composite device.
-   * MSC is always allocated first, CDC second (determined by Composite_Init order).
-   * alloc_index resets to 0 after both are allocated, so reinit works correctly.
+   * In MSC+CDC mode: MSC allocated first (buf 0), CDC second (buf 1).
+   * In CDC-only mode: CDC allocated first (buf 0).
+   * Call USBD_static_malloc_reset() before each MX_USB_Device_Init().
    */
-  static uint32_t msc_buf[(sizeof(USBD_MSC_BOT_HandleTypeDef) / 4U) + 1U];
-  static uint32_t cdc_buf[(sizeof(USBD_CDC_HandleTypeDef) / 4U) + 1U];
-  static uint8_t alloc_idx = 0U;
+  static uint32_t buf_0[(sizeof(USBD_MSC_BOT_HandleTypeDef) / 4U) + 1U];
+  static uint32_t buf_1[(sizeof(USBD_CDC_HandleTypeDef) / 4U) + 1U];
 
   UNUSED(size);
 
   if (alloc_idx == 0U)
   {
     alloc_idx = 1U;
-    return msc_buf;
+    return buf_0;
   }
   else
   {
     alloc_idx = 0U;
-    return cdc_buf;
+    return buf_1;
   }
 }
 

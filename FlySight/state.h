@@ -47,12 +47,15 @@ typedef struct
 	uint8_t  ble_irk[CONFIG_DATA_IR_LEN];
 	uint8_t  ble_erk[CONFIG_DATA_ER_LEN];
 	FS_State_ActiveMode_t active_mode;
+	uint8_t  competition_mode;
 } FS_State_Data_t;
 
 void FS_State_Init(void);
 void FS_State_Update(void);
+void FS_State_Save(void);
 const FS_State_Data_t *FS_State_Get(void);
 void FS_State_NextSession(void);
 void FS_State_SetConfigFilename(const char *filename);
+void FS_State_SetCompetitionMode(uint8_t enabled);
 
 #endif /* STATE_H_ */

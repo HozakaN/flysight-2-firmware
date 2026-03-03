@@ -159,6 +159,7 @@ void FS_State_Read(void)
 	memset(state.ble_irk, 0, CONFIG_DATA_IR_LEN);
 	memset(state.ble_erk, 0, CONFIG_DATA_ER_LEN);
 	state.active_mode = FS_ACTIVE_MODE_DEFAULT;
+	state.competition_mode = 0;
 
 	if (f_open(&stateFile, "/flysight.txt", FA_READ) != FR_OK)
 		return;
@@ -203,6 +204,7 @@ void FS_State_Read(void)
 		HANDLE_VALUE("Enable_BLE",  state.enable_ble,     val, val == 0 || val == 1);
 		HANDLE_VALUE("Reset_BLE",   state.reset_ble,      val, val == 0 || val == 1);
 		HANDLE_VALUE("Active_Mode", state.active_mode,    val, val >= 0 && val < FS_NUM_ACTIVE_MODES);
+		HANDLE_VALUE("Competition_Mode", state.competition_mode, val, val == 0 || val == 1);
 
 		if (!strcmp(name, "BLE_IRK") && (strlen(result) == 2 * CONFIG_DATA_IR_LEN))
 		{
@@ -302,6 +304,10 @@ static void FS_State_Write(void)
 	FS_State_WriteHex_8(&stateFile, state.ble_erk, 16);
 	f_printf(&stateFile, "\n\n");
 
+	f_printf(&stateFile, "; USB\n\n");
+
+	f_printf(&stateFile, "Competition_Mode: %u ; Should stay at 0 to keep USB working properly\n\n", state.competition_mode);
+
 	f_printf(&stateFile, "; Active mode\n\n");
 
 	f_printf(&stateFile, "Active_Mode:  %u ; 0 = Default\n", state.active_mode);
@@ -360,9 +366,22 @@ void FS_State_Update(void)
 	APP_BLE_UpdateDeviceName();
 }
 
+void FS_State_Save(void)
+{
+	/* Write current in-memory state without re-reading */
+	FS_ResourceManager_RequestResource(FS_RESOURCE_FATFS);
+	FS_State_Write();
+	FS_ResourceManager_ReleaseResource(FS_RESOURCE_FATFS);
+}
+
 const FS_State_Data_t *FS_State_Get(void)
 {
 	return &state;
+}
+
+void FS_State_SetCompetitionMode(uint8_t enabled)
+{
+	state.competition_mode = enabled;
 }
 
 void FS_State_NextSession(void)
