@@ -22,3 +22,6 @@ Deploy/Firmware_To_Deploy/*
 
 # Test build products
 Tests/*.exe
+
+# python virtual environments
+**/__pycache__/

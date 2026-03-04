@@ -21,6 +21,7 @@
 **  Website: http://flysight.ca/                                          **
 ****************************************************************************/
 
+#include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
 #include <ctype.h>
@@ -48,7 +49,8 @@
 typedef enum
 {
 	CLI_MODE_COMMAND,
-	CLI_MODE_FILE_WRITE
+	CLI_MODE_FILE_WRITE,
+	CLI_MODE_BINARY_WRITE
 } CLI_Mode_t;
 
 /* Ring buffer for USB -> CLI data */
@@ -70,6 +72,7 @@ static char path_buf[CLI_PATH_MAX];
 static CLI_Mode_t cli_mode;
 static FIL write_file;
 static uint32_t write_total;
+static uint32_t write_expected;
 
 static void FS_CLI_ProcessTask(void);
 static void FS_CLI_Send(const char *str);
@@ -91,7 +94,7 @@ void FS_CLI_Init(void)
 void FS_CLI_DeInit(void)
 {
 	/* Close any open write file */
-	if (cli_mode == CLI_MODE_FILE_WRITE)
+	if (cli_mode == CLI_MODE_FILE_WRITE || cli_mode == CLI_MODE_BINARY_WRITE)
 	{
 		f_close(&write_file);
 		FS_ResourceManager_ReleaseResource(FS_RESOURCE_FATFS);
@@ -126,8 +129,16 @@ static void FS_CLI_Send(const char *str)
 		uint32_t retry = 0;
 		while (CDC_Transmit_FS((uint8_t *)str, len) == USBD_BUSY)
 		{
-			if (++retry > 10000U)
-				break;  /* Give up after ~10ms to avoid hanging */
+			if (++retry > 100000U)
+				return;
+		}
+		/* Wait for all USB packets to be sent before returning,
+		 * so the caller can safely reuse the buffer. */
+		retry = 0;
+		while (CDC_TxBusy_FS())
+		{
+			if (++retry > 100000U)
+				break;
 		}
 	}
 }
@@ -139,7 +150,13 @@ static void FS_CLI_SendBuf(const char *buf, uint16_t len)
 		uint32_t retry = 0;
 		while (CDC_Transmit_FS((uint8_t *)buf, len) == USBD_BUSY)
 		{
-			if (++retry > 10000U)
+			if (++retry > 100000U)
+				return;
+		}
+		retry = 0;
+		while (CDC_TxBusy_FS())
+		{
+			if (++retry > 100000U)
 				break;
 		}
 	}
@@ -171,6 +188,28 @@ static void FS_CLI_ProcessFileWrite(uint8_t ch)
 	if (f_write(&write_file, &ch, 1, &bw) == FR_OK)
 	{
 		write_total += bw;
+	}
+}
+
+static void FS_CLI_ProcessBinaryWrite(uint8_t ch)
+{
+	UINT bw;
+
+	if (f_write(&write_file, &ch, 1, &bw) == FR_OK)
+	{
+		write_total += bw;
+	}
+
+	if (write_total >= write_expected)
+	{
+		f_close(&write_file);
+		FS_ResourceManager_ReleaseResource(FS_RESOURCE_FATFS);
+
+		snprintf(tx_buf, sizeof(tx_buf), "OK: Written %lu bytes\r\n", write_total);
+		FS_CLI_Send(tx_buf);
+
+		cli_mode = CLI_MODE_COMMAND;
+		FS_CLI_Send("> ");
 	}
 }
 
@@ -222,6 +261,10 @@ static void FS_CLI_ProcessTask(void)
 		{
 			FS_CLI_ProcessFileWrite(ch);
 		}
+		else if (cli_mode == CLI_MODE_BINARY_WRITE)
+		{
+			FS_CLI_ProcessBinaryWrite(ch);
+		}
 		else
 		{
 			FS_CLI_ProcessCommand(ch);
@@ -260,7 +303,7 @@ static uint8_t FS_CLI_IsDateTimeFolder(const char *name)
 
 static void FS_CLI_SendFileContents(const char *path)
 {
-	FIL file;
+	static FIL file;
 	UINT br;
 
 	if (f_open(&file, path, FA_READ) != FR_OK)
@@ -588,6 +631,31 @@ static void FS_CLI_CmdTempDelete(void)
 	FS_ResourceManager_ReleaseResource(FS_RESOURCE_FATFS);
 }
 
+static void FS_CLI_CmdFwUpload(uint32_t size)
+{
+	if (!FS_CLI_CheckFileAccess()) return;
+
+	if (FS_ResourceManager_RequestResource(FS_RESOURCE_FATFS) != FS_RESOURCE_MANAGER_SUCCESS)
+	{
+		FS_CLI_Send("ERROR: Cannot access filesystem.\r\n");
+		return;
+	}
+
+	f_mkdir("/FW");  /* ignore error if already exists */
+
+	if (f_open(&write_file, "/FW/app.sfb", FA_WRITE | FA_CREATE_ALWAYS) != FR_OK)
+	{
+		FS_CLI_Send("ERROR: Cannot open /FW/app.sfb for writing.\r\n");
+		FS_ResourceManager_ReleaseResource(FS_RESOURCE_FATFS);
+		return;
+	}
+
+	write_total = 0;
+	write_expected = size;
+	cli_mode = CLI_MODE_BINARY_WRITE;
+	FS_CLI_Send("READY\r\n");
+}
+
 /*---------------------------------------------------------------------------*/
 /* Command dispatcher                                                        */
 /*---------------------------------------------------------------------------*/
@@ -608,6 +676,7 @@ static void FS_CLI_Execute(const char *cmd)
 			"  config write    - Write config.txt (end with Ctrl-D)\r\n"
 			"  temp list       - List contents of /temp folder\r\n"
 			"  temp delete     - Delete all contents of /temp folder\r\n"
+			"  fw upload <n>   - Upload firmware binary (n bytes to /FW/app.sfb)\r\n"
 			"  msc             - Enable mass storage on next USB replug\r\n"
 			"  version         - Show firmware version\r\n"
 			"  help            - Show this help\r\n"
@@ -679,6 +748,18 @@ static void FS_CLI_Execute(const char *cmd)
 	else if (strcmp(cmd, "msc") == 0)
 	{
 		FS_CLI_CmdMSC();
+	}
+	else if (strncmp(cmd, "fw upload ", 10) == 0)
+	{
+		uint32_t size = strtoul(cmd + 10, NULL, 10);
+		if (size > 0)
+		{
+			FS_CLI_CmdFwUpload(size);
+		}
+		else
+		{
+			FS_CLI_Send("Usage: fw upload <size_in_bytes>\r\n");
+		}
 	}
 	else if (strcmp(cmd, "version") == 0)
 	{

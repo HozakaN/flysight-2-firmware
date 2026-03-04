@@ -71,6 +71,17 @@ python temp_delete.py
 python temp_delete.py -p /dev/tty.usbmodemXXXX
 ```
 
+### Deploy firmware
+
+Upload a firmware binary (.sfb) to the device:
+
+```bash
+python deploy_firmware.py firmware.sfb
+python deploy_firmware.py -p /dev/tty.usbmodemXXXX firmware.sfb
+```
+
+The file is written to `/FW/app.sfb` on the device using a binary-safe size-prefixed protocol.
+
 ### Enable mass storage mode
 
 Switches the device back to mass storage mode on the next USB replug:
@@ -99,6 +110,7 @@ These scripts use the following firmware CLI commands over serial:
 | `track latest`   | Dump all files from latest track folder          |
 | `temp list`      | List contents of `/temp` folder                  |
 | `temp delete`    | Delete all contents of `/temp` folder            |
+| `fw upload <n>`  | Upload firmware binary (n bytes to `/FW/app.sfb`)|
 | `msc`            | Enable mass storage on next USB replug           |
 | `pair start`     | Start BLE pairing                                |
 | `pair stop`      | Stop BLE pairing                                 |

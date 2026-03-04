@@ -216,6 +216,62 @@ class FlySightCLI:
         raw = self._read_until_prompt()
         return raw.decode("utf-8", errors="replace")
 
+    def write_binary_command(self, cmd, data, progress_cb=None):
+        """
+        Send a binary write command and transfer raw data.
+
+        Uses a size-prefixed protocol (no EOF marker) so that
+        arbitrary binary data (including 0x04 bytes) is safe.
+
+        Protocol:
+            1. Send command (includes size)
+            2. Wait for "READY"
+            3. Send binary data in chunks
+            4. Firmware auto-closes file when expected bytes received
+            5. Wait for "OK: Written N bytes"
+
+        Args:
+            cmd: Command string (e.g., "fw upload 12345")
+            data: Raw bytes to send
+            progress_cb: Optional callback(sent, total) for progress
+
+        Returns the firmware response string.
+        """
+        self.ser.reset_input_buffer()
+        self.ser.write((cmd + "\r\n").encode())
+
+        # Wait for READY
+        deadline = time.time() + 5
+        buf = b""
+        while time.time() < deadline:
+            chunk = self.ser.read(self.ser.in_waiting or 1)
+            if chunk:
+                buf += chunk
+                if b"READY" in buf:
+                    break
+            else:
+                time.sleep(0.01)
+
+        if b"READY" not in buf:
+            text = buf.decode("utf-8", errors="replace")
+            raise RuntimeError(f"Did not receive READY response: {text}")
+
+        # Small delay to let firmware settle
+        time.sleep(0.05)
+
+        # Send binary data in chunks (no EOF marker)
+        chunk_size = 64
+        total = len(data)
+        for i in range(0, total, chunk_size):
+            self.ser.write(data[i:i + chunk_size])
+            time.sleep(0.01)  # Pace to avoid overflowing ring buffer
+            if progress_cb:
+                progress_cb(min(i + chunk_size, total), total)
+
+        # Wait for response (longer timeout for large files)
+        raw = self._read_until_prompt(timeout=30)
+        return raw.decode("utf-8", errors="replace")
+
 
 def add_port_argument(parser):
     """Add the --port argument to an argparse parser."""

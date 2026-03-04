@@ -33,6 +33,7 @@ extern "C" {
 extern USBD_CDC_ItfTypeDef USBD_CDC_fops;
 
 uint8_t CDC_Transmit_FS(uint8_t *Buf, uint16_t Len);
+uint8_t CDC_TxBusy_FS(void);
 
 #ifdef __cplusplus
 }

@@ -169,3 +169,18 @@ uint8_t CDC_Transmit_FS(uint8_t *Buf, uint16_t Len)
 
   return result;
 }
+
+uint8_t CDC_TxBusy_FS(void)
+{
+  USBD_CDC_HandleTypeDef *hcdc;
+
+  hUsbDeviceFS.classId = COMPOSITE_CDC_CLASS_ID;
+  hcdc = (USBD_CDC_HandleTypeDef *)hUsbDeviceFS.pClassDataCmsit[hUsbDeviceFS.classId];
+
+  if (hcdc == NULL)
+  {
+    return 0U;
+  }
+
+  return (hcdc->TxState != 0U) ? 1U : 0U;
+}
