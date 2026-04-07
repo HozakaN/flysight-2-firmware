@@ -21,24 +21,14 @@
 **  Website: http://flysight.ca/                                          **
 ****************************************************************************/
 
-#ifndef USBD_CDC_IF_H_
-#define USBD_CDC_IF_H_
+#ifndef CLI_TRANSPORT_H_
+#define CLI_TRANSPORT_H_
 
-#ifdef __cplusplus
-extern "C" {
-#endif
+#include <stdint.h>
 
-#include "usbd_cdc.h"
-#include "cli_transport.h"
+typedef struct {
+	uint8_t (*transmit)(const uint8_t *buf, uint16_t len);
+	uint8_t (*tx_busy)(void);
+} FS_CLI_Transport_t;
 
-extern USBD_CDC_ItfTypeDef USBD_CDC_fops;
-extern const FS_CLI_Transport_t cli_transport_cdc;
-
-uint8_t CDC_Transmit_FS(uint8_t *Buf, uint16_t Len);
-uint8_t CDC_TxBusy_FS(void);
-
-#ifdef __cplusplus
-}
-#endif
-
-#endif /* USBD_CDC_IF_H_ */
+#endif /* CLI_TRANSPORT_H_ */

@@ -28,6 +28,8 @@
 #include "app_ble.h"
 #include "app_common.h"
 #include "button.h"
+#include "cli.h"
+#include "cli_uart.h"
 #include "config_mode.h"
 #include "custom_app.h"
 #include "log.h"
@@ -347,6 +349,10 @@ void FS_Mode_Init(void)
 	queue_read = 0;
 	queue_write = 0;
 	__set_PRIMASK(primask_bit);
+
+	/* Initialize CLI core and UART transport (always active) */
+	FS_CLI_Init();
+	FS_CLI_UART_Init();
 
 	if (HAL_GPIO_ReadPin(VBUS_DIV_GPIO_Port, VBUS_DIV_Pin))
 	{

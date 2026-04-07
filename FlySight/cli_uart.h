@@ -21,24 +21,13 @@
 **  Website: http://flysight.ca/                                          **
 ****************************************************************************/
 
-#ifndef USBD_CDC_IF_H_
-#define USBD_CDC_IF_H_
+#ifndef CLI_UART_H_
+#define CLI_UART_H_
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
-#include "usbd_cdc.h"
 #include "cli_transport.h"
 
-extern USBD_CDC_ItfTypeDef USBD_CDC_fops;
-extern const FS_CLI_Transport_t cli_transport_cdc;
+extern const FS_CLI_Transport_t cli_transport_uart;
 
-uint8_t CDC_Transmit_FS(uint8_t *Buf, uint16_t Len);
-uint8_t CDC_TxBusy_FS(void);
+void FS_CLI_UART_Init(void);
 
-#ifdef __cplusplus
-}
-#endif
-
-#endif /* USBD_CDC_IF_H_ */
+#endif /* CLI_UART_H_ */

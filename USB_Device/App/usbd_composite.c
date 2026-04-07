@@ -29,6 +29,13 @@
 /* MSC enabled flag */
 static uint8_t msc_active = 0;
 
+/* MSC class functions (defined in usbd_msc.c but not exported in header) */
+extern uint8_t USBD_MSC_Init(USBD_HandleTypeDef *pdev, uint8_t cfgidx);
+extern uint8_t USBD_MSC_DeInit(USBD_HandleTypeDef *pdev, uint8_t cfgidx);
+extern uint8_t USBD_MSC_Setup(USBD_HandleTypeDef *pdev, USBD_SetupReqTypedef *req);
+extern uint8_t USBD_MSC_DataIn(USBD_HandleTypeDef *pdev, uint8_t epnum);
+extern uint8_t USBD_MSC_DataOut(USBD_HandleTypeDef *pdev, uint8_t epnum);
+
 /* Forward declarations */
 static uint8_t Composite_Init(USBD_HandleTypeDef *pdev, uint8_t cfgidx);
 static uint8_t Composite_DeInit(USBD_HandleTypeDef *pdev, uint8_t cfgidx);

@@ -28,6 +28,7 @@
 #include "state.h"
 #include "usb_control.h"
 #include "usb_device.h"
+#include "usbd_cdc_if.h"
 #include "usbd_composite.h"
 #include "usbd_core.h"
 
@@ -65,21 +66,17 @@ void FS_USBMode_Init(void)
 	/* Enable USB interface */
 	MX_USB_Device_Init();
 
-	/* Initialize CLI only in CDC-only mode */
+	/* Send CLI welcome on CDC when in CDC-only mode */
 	if (!msc_enabled)
 	{
-		FS_CLI_Init();
+		static const char welcome[] = "\r\nFlySight CLI ready (USB). Type 'help' for commands.\r\n> ";
+		FS_CLI_SetActiveTransport(&cli_transport_cdc);
+		CDC_Transmit_FS((uint8_t *)welcome, sizeof(welcome) - 1);
 	}
 }
 
 void FS_USBMode_DeInit(void)
 {
-	/* De-initialize CLI if it was active */
-	if (!msc_enabled)
-	{
-		FS_CLI_DeInit();
-	}
-
 	/* Disable controller */
 	FS_USBControl_DeInit();
 

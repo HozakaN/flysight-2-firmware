@@ -34,7 +34,7 @@
 #include "resource_manager.h"
 #include "state.h"
 #include "stm32_seq.h"
-#include "usbd_cdc_if.h"
+#include "cli_transport.h"
 #include "usbd_composite.h"
 #include "version.h"
 
@@ -68,6 +68,9 @@ static char tx_buf[CLI_TX_BUF_SIZE];
 /* Path buffer for file operations */
 static char path_buf[CLI_PATH_MAX];
 
+/* Active transport for TX routing */
+static const FS_CLI_Transport_t *active_transport = NULL;
+
 /* File write state */
 static CLI_Mode_t cli_mode;
 static FIL write_file;
@@ -87,8 +90,6 @@ void FS_CLI_Init(void)
 	cli_mode = CLI_MODE_COMMAND;
 
 	UTIL_SEQ_RegTask(1 << CFG_TASK_FS_CLI_UPDATE_ID, UTIL_SEQ_RFU, FS_CLI_ProcessTask);
-
-	FS_CLI_Send("\r\nFlySight CLI ready. Type 'help' for commands.\r\n> ");
 }
 
 void FS_CLI_DeInit(void)
@@ -104,6 +105,11 @@ void FS_CLI_DeInit(void)
 	rx_head = 0;
 	rx_tail = 0;
 	cmd_len = 0;
+}
+
+void FS_CLI_SetActiveTransport(const FS_CLI_Transport_t *transport)
+{
+	active_transport = transport;
 }
 
 void FS_CLI_RxCallback(const uint8_t *data, uint32_t len)
@@ -123,19 +129,19 @@ void FS_CLI_RxCallback(const uint8_t *data, uint32_t len)
 
 static void FS_CLI_Send(const char *str)
 {
+	if (!active_transport) return;
+
 	uint16_t len = (uint16_t)strlen(str);
 	if (len > 0)
 	{
 		uint32_t retry = 0;
-		while (CDC_Transmit_FS((uint8_t *)str, len) == USBD_BUSY)
+		while (active_transport->transmit((const uint8_t *)str, len) != 0)
 		{
 			if (++retry > 100000U)
 				return;
 		}
-		/* Wait for all USB packets to be sent before returning,
-		 * so the caller can safely reuse the buffer. */
 		retry = 0;
-		while (CDC_TxBusy_FS())
+		while (active_transport->tx_busy())
 		{
 			if (++retry > 100000U)
 				break;
@@ -145,16 +151,18 @@ static void FS_CLI_Send(const char *str)
 
 static void FS_CLI_SendBuf(const char *buf, uint16_t len)
 {
+	if (!active_transport) return;
+
 	if (len > 0)
 	{
 		uint32_t retry = 0;
-		while (CDC_Transmit_FS((uint8_t *)buf, len) == USBD_BUSY)
+		while (active_transport->transmit((const uint8_t *)buf, len) != 0)
 		{
 			if (++retry > 100000U)
 				return;
 		}
 		retry = 0;
-		while (CDC_TxBusy_FS())
+		while (active_transport->tx_busy())
 		{
 			if (++retry > 100000U)
 				break;

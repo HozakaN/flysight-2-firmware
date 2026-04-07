@@ -23,6 +23,8 @@
 
 #include "usbd_cdc_if.h"
 #include "usbd_composite.h"
+#include "cli.h"
+#include "cli_transport.h"
 
 /* Forward declarations of the CDC callback functions */
 extern USBD_HandleTypeDef hUsbDeviceFS;
@@ -32,13 +34,6 @@ static uint8_t UserRxBufferFS[CDC_DATA_FS_MAX_PACKET_SIZE];
 
 /* CDC Tx buffer */
 static uint8_t UserTxBufferFS[CDC_DATA_FS_MAX_PACKET_SIZE];
-
-/* Weak callback for CLI to override */
-__attribute__((weak)) void FS_CLI_RxCallback(const uint8_t *data, uint32_t len)
-{
-  (void)data;
-  (void)len;
-}
 
 static int8_t CDC_Init_FS(void);
 static int8_t CDC_DeInit_FS(void);
@@ -128,6 +123,7 @@ static int8_t CDC_Control_FS(uint8_t cmd, uint8_t *pbuf, uint16_t length)
 static int8_t CDC_Receive_FS(uint8_t *Buf, uint32_t *Len)
 {
   /* Forward received data to the CLI module */
+  FS_CLI_SetActiveTransport(&cli_transport_cdc);
   FS_CLI_RxCallback(Buf, *Len);
 
   /* Re-arm the OUT endpoint for the next reception */
@@ -184,3 +180,18 @@ uint8_t CDC_TxBusy_FS(void)
 
   return (hcdc->TxState != 0U) ? 1U : 0U;
 }
+
+static uint8_t cdc_transport_transmit(const uint8_t *buf, uint16_t len)
+{
+  return CDC_Transmit_FS((uint8_t *)buf, len);
+}
+
+static uint8_t cdc_transport_tx_busy(void)
+{
+  return CDC_TxBusy_FS();
+}
+
+const FS_CLI_Transport_t cli_transport_cdc = {
+  .transmit = cdc_transport_transmit,
+  .tx_busy  = cdc_transport_tx_busy,
+};

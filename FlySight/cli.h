@@ -26,10 +26,13 @@
 
 #include <stdint.h>
 
+#include "cli_transport.h"
+
 void FS_CLI_Init(void);
 void FS_CLI_DeInit(void);
+void FS_CLI_SetActiveTransport(const FS_CLI_Transport_t *transport);
 
-/* Called from CDC receive callback (USB interrupt context) */
+/* Called from transport receive callback (USB or UART interrupt context) */
 void FS_CLI_RxCallback(const uint8_t *data, uint32_t len);
 
 #endif /* CLI_H_ */
