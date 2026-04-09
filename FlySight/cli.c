@@ -674,20 +674,22 @@ static void FS_CLI_Execute(const char *cmd)
 	{
 		FS_CLI_Send(
 			"Available commands:\r\n"
-			"  pair start      - Start BLE pairing mode\r\n"
-			"  pair stop       - Stop BLE pairing mode\r\n"
-			"  status          - Show device mode and BLE state\r\n"
-			"  track latest    - Show all files from latest track\r\n"
-			"  flysight read   - Show flysight.txt (device state)\r\n"
-			"  flysight write  - Write flysight.txt (end with Ctrl-D)\r\n"
-			"  config read     - Show config.txt (logging config)\r\n"
-			"  config write    - Write config.txt (end with Ctrl-D)\r\n"
-			"  temp list       - List contents of /temp folder\r\n"
-			"  temp delete     - Delete all contents of /temp folder\r\n"
-			"  fw upload <n>   - Upload firmware binary (n bytes to /FW/app.sfb)\r\n"
-			"  msc             - Enable mass storage on next USB replug\r\n"
-			"  version         - Show firmware version\r\n"
-			"  help            - Show this help\r\n"
+			"  pair start             - Start BLE pairing mode\r\n"
+			"  pair stop              - Stop BLE pairing mode\r\n"
+			"  status                 - Show device mode and BLE state\r\n"
+			"  track latest           - Show all files from latest track\r\n"
+			"  flysight read          - Show flysight.txt\r\n"
+			"  flysight write         - Write flysight.txt (end with Ctrl-D)\r\n"
+			"  config read            - Show config.txt\r\n"
+			"  config write           - Write config.txt (end with Ctrl-D)\r\n"
+			"  file read <path>       - Read a text file (path: string, max 64 chars)\r\n"
+			"  file write <path>      - Write a text file (path: string, max 64 chars, end with Ctrl-D)\r\n"
+			"  temp list              - List contents of /temp folder\r\n"
+			"  temp delete            - Delete all contents of /temp folder\r\n"
+			"  fw upload <n>          - Upload firmware binary (n: file size in bytes, to /FW/app.sfb)\r\n"
+			"  msc                    - Enable mass storage on next USB replug\r\n"
+			"  version                - Show firmware version\r\n"
+			"  help                   - Show this help\r\n"
 		);
 	}
 	else if (strcmp(cmd, "pair start") == 0)
@@ -744,6 +746,14 @@ static void FS_CLI_Execute(const char *cmd)
 	else if (strcmp(cmd, "config write") == 0)
 	{
 		FS_CLI_WriteFile("/config.txt");
+	}
+	else if (strncmp(cmd, "file read ", 10) == 0)
+	{
+		FS_CLI_ReadFile(cmd + 10);
+	}
+	else if (strncmp(cmd, "file write ", 11) == 0)
+	{
+		FS_CLI_WriteFile(cmd + 11);
 	}
 	else if (strcmp(cmd, "temp list") == 0)
 	{
