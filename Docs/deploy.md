@@ -63,6 +63,7 @@ FlySight devices are manufactured in batches, and each batch is provisioned with
 | `dac40d2597e371390a84f3196d4256b5c96a89373afb3584dcbc226b74bcbc0c` | `pub_key_b4.bin`     | B4         |
 | `3157e02846ddfd2a78347e099ba1d86c92920b101137f28091ed0dec3b4589c2`  | `pub_key_b5.bin`     | B5         |
 | `8ee7870905b3e792df0ed796b996c9ff743d196c2e8abbf1a39f39733cceac80` | `pub_key_b6.bin`     | B6         |
+| `728168718da35f7de7cf9ab6b10eb6d74f2cb31614daa2cc4e7963c2ab4e5b11` | `pub_key_b7.bin`     | B7         |
 
 ## The `deploy_firmware.py` Script
 

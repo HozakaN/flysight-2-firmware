@@ -367,6 +367,68 @@ void FS_Mode_Init(void)
 	HW_TS_Create(CFG_TIM_PROC_ID_ISR, &timer_id, hw_ts_SingleShot, FS_Mode_Timer);
 }
 
+static void FS_Mode_DeInitCurrent(void)
+{
+	switch (mode_state)
+	{
+	case FS_MODE_STATE_ACTIVE:
+		FS_ActiveMode_DeInit();
+		break;
+	case FS_MODE_STATE_CONFIG:
+		FS_ConfigMode_DeInit();
+		break;
+	case FS_MODE_STATE_PAIRING:
+		FS_PairingMode_DeInit();
+		break;
+	case FS_MODE_STATE_START:
+		FS_StartMode_DeInit();
+		break;
+	case FS_MODE_STATE_USB:
+		FS_USBMode_DeInit();
+		break;
+	default:
+		break;
+	}
+}
+
+void FS_Mode_ForceState(FS_Mode_State_t target)
+{
+	if (target == mode_state || target >= FS_MODE_STATE_COUNT)
+		return;
+
+	/* Stop any pending button timer */
+	HW_TS_Stop(timer_id);
+	button_state = BUTTON_IDLE;
+
+	/* DeInit current mode */
+	FS_Mode_DeInitCurrent();
+
+	/* Init target mode */
+	switch (target)
+	{
+	case FS_MODE_STATE_ACTIVE:
+		FS_ActiveMode_Init();
+		break;
+	case FS_MODE_STATE_CONFIG:
+		FS_ConfigMode_Init();
+		break;
+	case FS_MODE_STATE_PAIRING:
+		FS_PairingMode_Init();
+		break;
+	case FS_MODE_STATE_START:
+		FS_StartMode_Init();
+		break;
+	case FS_MODE_STATE_SLEEP:
+		/* No init for sleep */
+		break;
+	default:
+		return;
+	}
+
+	mode_state = target;
+	Custom_Mode_Update((uint8_t)target);
+}
+
 FS_Mode_State_t FS_Mode_State(void)
 {
 	return mode_state;

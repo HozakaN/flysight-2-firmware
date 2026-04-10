@@ -687,6 +687,7 @@ static void FS_CLI_Execute(const char *cmd)
 			"  temp list              - List contents of /temp folder\r\n"
 			"  temp delete            - Delete all contents of /temp folder\r\n"
 			"  fw upload <n>          - Upload firmware binary (n: file size in bytes, to /FW/app.sfb)\r\n"
+			"  mode <state>           - Change device mode (state: sleep|active|start|config)\r\n"
 			"  msc                    - Enable mass storage on next USB replug\r\n"
 			"  version                - Show firmware version\r\n"
 			"  help                   - Show this help\r\n"
@@ -778,6 +779,25 @@ static void FS_CLI_Execute(const char *cmd)
 		{
 			FS_CLI_Send("Usage: fw upload <size_in_bytes>\r\n");
 		}
+	}
+	else if (strncmp(cmd, "mode ", 5) == 0)
+	{
+		const char *target = cmd + 5;
+		if (strcmp(target, "sleep") == 0)
+			FS_Mode_ForceState(FS_MODE_STATE_SLEEP);
+		else if (strcmp(target, "active") == 0)
+			FS_Mode_ForceState(FS_MODE_STATE_ACTIVE);
+		else if (strcmp(target, "start") == 0)
+			FS_Mode_ForceState(FS_MODE_STATE_START);
+		else if (strcmp(target, "config") == 0)
+			FS_Mode_ForceState(FS_MODE_STATE_CONFIG);
+		else
+		{
+			FS_CLI_Send("Usage: mode sleep|active|start|config\r\n");
+			return;
+		}
+		snprintf(tx_buf, sizeof(tx_buf), "Mode changed to: %s\r\n", target);
+		FS_CLI_Send(tx_buf);
 	}
 	else if (strcmp(cmd, "version") == 0)
 	{

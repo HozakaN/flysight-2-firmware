@@ -50,5 +50,6 @@ typedef enum
 void FS_Mode_Init(void);
 void FS_Mode_PushQueue(FS_Mode_Event_t event);
 FS_Mode_State_t FS_Mode_State(void);
+void FS_Mode_ForceState(FS_Mode_State_t target);
 
 #endif /* MODE_H_ */
