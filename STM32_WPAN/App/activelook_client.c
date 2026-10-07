@@ -181,6 +181,7 @@ void FS_ActiveLook_Client_EventHandler(void *p_blecore_evt, uint8_t hci_event_ev
                 (aci_att_exchange_mtu_resp_event_rp0*) blecore_evt->data;
             APP_DBG_MSG("ActiveLook_Client: ACI_ATT_EXCHANGE_MTU_RESP, final MTU=%d\r\n",
                         mtu_resp->Server_RX_MTU);
+            UNUSED(mtu_resp);
             /* Wait for ACI_GATT_PROC_COMPLETE_VSEVT_CODE to know the procedure is done. */
         }
         break;
@@ -426,8 +427,10 @@ void FS_ActiveLook_Client_EventHandler(void *p_blecore_evt, uint8_t hci_event_ev
                     /* typical format: 2B decl handle, 1B props, 2B value handle, then the UUID */
                     uint16_t declHandle = UNPACK_2_BYTE_PARAMETER(&pr->Handle_Value_Pair_Data[idx]);
                     idx += 2;
+                    UNUSED(declHandle);
 
                     uint8_t properties = pr->Handle_Value_Pair_Data[idx++];
+                    UNUSED(properties);
                     uint16_t valHandle = UNPACK_2_BYTE_PARAMETER(&pr->Handle_Value_Pair_Data[idx]);
                     idx += 2;
 
