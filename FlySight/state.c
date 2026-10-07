@@ -139,6 +139,26 @@ uint8_t is_all_zeros(const void *buffer, size_t size) {
     return 1;
 }
 
+static void FS_State_Complete(void)
+{
+	/* Get device ID */
+	state.device_id[0] = HAL_GetUIDw0();
+	state.device_id[1] = HAL_GetUIDw1();
+	state.device_id[2] = HAL_GetUIDw2();
+
+	/* Initialize IRK if needed */
+	while (is_all_zeros(state.ble_irk, CONFIG_DATA_IR_LEN))
+	{
+		FS_Common_GetRandomBytes((uint32_t *) state.ble_irk, CONFIG_DATA_IR_LEN / 4);
+	}
+
+	/* Initialize ERK if needed */
+	while (is_all_zeros(state.ble_erk, CONFIG_DATA_ER_LEN))
+	{
+		FS_Common_GetRandomBytes((uint32_t *) state.ble_erk, CONFIG_DATA_ER_LEN / 4);
+	}
+}
+
 void FS_State_Read(void)
 {
 	char    buffer[100];
@@ -161,7 +181,12 @@ void FS_State_Read(void)
 	state.active_mode = FS_ACTIVE_MODE_DEFAULT;
 
 	if (f_open(&stateFile, "/flysight.txt", FA_READ) != FR_OK)
+	{
+		/* No state file yet: the keys must still be generated, or this boot would run
+		   with all-zero root keys and the next one with different ones */
+		FS_State_Complete();
 		return;
+	}
 
 	while (!f_eof(&stateFile))
 	{
@@ -219,22 +244,7 @@ void FS_State_Read(void)
 
 	f_close(&stateFile);
 
-	/* Get device ID */
-	state.device_id[0] = HAL_GetUIDw0();
-	state.device_id[1] = HAL_GetUIDw1();
-	state.device_id[2] = HAL_GetUIDw2();
-
-	/* Initialize IRK if needed */
-	while (is_all_zeros(state.ble_irk, CONFIG_DATA_IR_LEN))
-	{
-		FS_Common_GetRandomBytes((uint32_t *) state.ble_irk, CONFIG_DATA_IR_LEN / 4);
-	}
-
-	/* Initialize ERK if needed */
-	while (is_all_zeros(state.ble_erk, CONFIG_DATA_ER_LEN))
-	{
-		FS_Common_GetRandomBytes((uint32_t *) state.ble_erk, CONFIG_DATA_ER_LEN / 4);
-	}
+	FS_State_Complete();
 }
 
 static void FS_State_Write(void)
