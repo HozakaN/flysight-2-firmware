@@ -2,6 +2,11 @@
 .settings/
 .metadata/
 
+.DS_Store
+.vscode/*
+Deploy/
+Scripts/venv/*
+
 # Build folders
 Debug/
 Release/
@@ -20,3 +25,8 @@ Deploy/Firmware_To_Deploy/*
 
 # Test build products
 Tests/*.exe
+Tests/test_time
+Tests/*.dSYM/
+
+# python virtual environments
+**/__pycache__/
