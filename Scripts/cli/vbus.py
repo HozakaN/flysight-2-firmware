@@ -36,6 +36,7 @@ import glob
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -530,8 +531,14 @@ def build_parser():
     return parser
 
 
+def _terminate(signum, frame):
+    # Same path as Ctrl-C, so cycle's `finally` still gives PA2 back
+    raise KeyboardInterrupt
+
+
 def main(argv=None):
     args = build_parser().parse_args(argv)
+    signal.signal(signal.SIGTERM, _terminate)
     try:
         swd = Swd(find_programmer(args.programmer), sn=args.sn, timeout=args.swd_timeout)
         return args.func(swd, args)
