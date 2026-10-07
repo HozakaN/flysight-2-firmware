@@ -41,23 +41,43 @@ typedef struct
 static BLE_TX_Queue_Packet_t tx_buffer[FS_CRS_WINDOW_LENGTH+1];
 static uint32_t tx_read_index, tx_write_index;
 static uint8_t tx_flow_status;
+static uint8_t tx_ready;
 
 static void BLE_TX_Queue_Transmit(void);
 
+/*
+ * While start-up waits for CPU2 the sequencer runs every pending task, so
+ * application code (e.g. a mode change when USB is plugged in at boot) can
+ * queue packets before BLE_TX_Queue_Init() has registered the transmit task.
+ * Setting an unregistered task makes the sequencer call a NULL callback, so
+ * only schedule once registered; BLE_TX_Queue_Init() sends what is waiting.
+ */
+static void BLE_TX_Queue_Schedule(void)
+{
+	if (tx_ready)
+	{
+		UTIL_SEQ_SetTask(1<<CFG_TASK_BLE_TX_QUEUE_TRANSMIT_ID, CFG_SCH_PRIO_1);
+	}
+}
+
 void BLE_TX_Queue_Init(void)
 {
-	tx_read_index = 0;
-	tx_write_index = 0;
 	tx_flow_status = 1;
 
 	UTIL_SEQ_RegTask(1<<CFG_TASK_BLE_TX_QUEUE_TRANSMIT_ID, UTIL_SEQ_RFU,
 			BLE_TX_Queue_Transmit);
+	tx_ready = 1;
+
+	if (tx_read_index < tx_write_index)
+	{
+		BLE_TX_Queue_Schedule();
+	}
 }
 
 void BLE_TX_Queue_TxPoolAvailableNotification(void)
 {
 	tx_flow_status = 1;
-	UTIL_SEQ_SetTask(1<<CFG_TASK_BLE_TX_QUEUE_TRANSMIT_ID, CFG_SCH_PRIO_1);
+	BLE_TX_Queue_Schedule();
 }
 
 uint8_t *BLE_TX_Queue_GetNextTxPacket(void)
@@ -86,7 +106,7 @@ void BLE_TX_Queue_SendNextTxPacket(Custom_STM_Char_Opcode_t opcode,
 		packet->callback = callback;
 
 		++tx_write_index;
-		UTIL_SEQ_SetTask(1<<CFG_TASK_BLE_TX_QUEUE_TRANSMIT_ID, CFG_SCH_PRIO_1);
+		BLE_TX_Queue_Schedule();
 	}
 	else
 	{
@@ -137,7 +157,7 @@ static void BLE_TX_Queue_Transmit(void)
 			{
 				packet->callback();
 			}
-			UTIL_SEQ_SetTask(1<<CFG_TASK_BLE_TX_QUEUE_TRANSMIT_ID, CFG_SCH_PRIO_1);
+			BLE_TX_Queue_Schedule();
 		}
 
 		tx_busy = 0;
