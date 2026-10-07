@@ -199,6 +199,8 @@ typedef struct
 
 #define BD_ADDR_SIZE_LOCAL    6
 
+#define BLE_PRIVACY_MODE_DEVICE   0x01 /**< Peer may use its identity address too */
+
 /* USER CODE BEGIN PD */
 
 /* USER CODE END PD */
@@ -1636,6 +1638,23 @@ static int8_t ble_count_bonded_devices(void)
   {
     APP_DBG_MSG("aci_gap_add_devices_to_resolving_list fail %x\r\n", ret);
     return -1;
+  }
+
+  // 4) Let bonded peers connect with their identity address too. Entries of the
+  //    resolving list default to Network Privacy mode, where the controller
+  //    silently ignores a connection request that does not use a resolvable
+  //    private address. A Mac connects from its public identity address
+  //    (measured on macOS 26), so without this a bonded Mac never reaches us,
+  //    in pairing mode or not.
+  for (uint8_t k = 0; k < total; k++)
+  {
+    ret = hci_le_set_privacy_mode(rl_entries[k].Peer_Identity_Address_Type,
+                                  rl_entries[k].Peer_Identity_Address,
+                                  BLE_PRIVACY_MODE_DEVICE);
+    if (ret != BLE_STATUS_SUCCESS)
+    {
+      APP_DBG_MSG("hci_le_set_privacy_mode fail %x\r\n", ret);
+    }
   }
 
   APP_DBG_MSG("Resolving List populated with %u bonded device(s)\r\n", total);
