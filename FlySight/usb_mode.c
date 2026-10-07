@@ -52,6 +52,13 @@ void FS_USBMode_Init(void)
 
 void FS_USBMode_DeInit(void)
 {
+	/*
+	 * Leave the bus first. A host command arriving during the flush below
+	 * would use the microSD from the USB interrupt while the flush is using
+	 * it from this task, and the SPI/DMA transfer could then never complete.
+	 */
+	(void)USBD_LL_Stop(&hUsbDeviceFS);
+
 	/* Flush any deferred USB mass-storage writes before shutting down. */
 	if (USBD_SyncStorage() < 0)
 	{
