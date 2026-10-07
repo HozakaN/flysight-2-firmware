@@ -1458,6 +1458,15 @@ static void Adv_Update_Req(void)
 
 static void Adv_Update(void)
 {
+  /*
+   * The fast advertising period is over, and with it any pairing window. The
+   * mode task has not left pairing mode yet at this point, so clear the request
+   * here: otherwise advertising restarts in pairing configuration (limited
+   * discoverable, pairing flag set, accept list off) and nothing restarts it in
+   * normal configuration afterwards.
+   */
+  request_pairing = 0;
+
   FS_Adv_Request(APP_BLE_LP_ADV);
 }
 
