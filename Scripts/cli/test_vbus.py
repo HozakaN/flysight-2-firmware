@@ -95,6 +95,92 @@ class ForceTests(unittest.TestCase):
             vbus.force_unplugged(gpio)
 
 
+class FakeGpioC:
+    """GPIOC for PC12: a button that pulls the pin low when pressed, otherwise the pull-up wins."""
+
+    GPIOC = vbus.GPIOC
+
+    def __init__(self, moder=0xFFFFFFFF, odr=0x1000):
+        self.moder = moder          # reset value of GPIOC.MODER: every pin an input
+        self.odr = odr
+        self.writes = []
+
+    def idr(self):
+        bit = 1 << vbus.BUTTON_PIN
+        out = (self.moder >> (2 * vbus.BUTTON_PIN)) & 0b11 == 0b01
+        high = (self.odr & bit) != 0 if out else True
+        return bit if high else 0
+
+    def _word(self, addr):
+        return {self.GPIOC: self.moder, self.GPIOC + 0x10: self.idr(), self.GPIOC + 0x14: self.odr}[addr]
+
+    def read(self, *specs):
+        values = []
+        for addr, width in specs:
+            if width == 8:
+                base = addr & ~3
+                values.append((self.moder >> (8 * (addr - base))) & 0xFF)
+            else:
+                values.append(self._word(addr))
+        return values
+
+    def write8(self, addr, value):
+        shift = 8 * (addr - self.GPIOC)
+        self.writes.append(("w8", addr, value))
+        self.moder = (self.moder & ~(0xFF << shift)) | (value << shift)
+
+    def write32(self, addr, value, check=True):
+        assert addr == self.GPIOC + 0x18
+        self.writes.append(("w32", addr, value))
+        self.odr = (self.odr | (value & 0xFFFF)) & ~(value >> 16)
+
+
+class ButtonTests(unittest.TestCase):
+    def test_press_pulls_pc12_low_and_leaves_other_pins(self):
+        gpio = FakeGpioC(moder=0xABFFFFFF)
+        vbus.press_button(gpio)
+        self.assertFalse(gpio.idr())
+        self.assertEqual(gpio.moder & ~(0b11 << 24), 0xABFFFFFF & ~(0b11 << 24))
+
+    def test_press_only_touches_the_byte_holding_pc12(self):
+        gpio = FakeGpioC()
+        vbus.press_button(gpio)
+        # PC12 is bits 24..25 of MODER, that is byte 3
+        self.assertEqual([w for w in gpio.writes if w[0] == "w8"], [("w8", vbus.GPIOC + 3, 0xFD)])
+
+    def test_release_gives_the_pin_back(self):
+        gpio = FakeGpioC(moder=0xABFFFFFF)
+        vbus.press_button(gpio)
+        vbus.release_button(gpio)
+        self.assertEqual(gpio.moder, 0xABFFFFFF & ~(0b11 << 24))
+        self.assertTrue(gpio.idr())
+
+    def test_odr_bit_is_cleared_through_bsrr(self):
+        gpio = FakeGpioC(odr=0x1000)
+        vbus.press_button(gpio)
+        self.assertIn(("w32", vbus.GPIOC + 0x18, (1 << vbus.BUTTON_PIN) << 16), gpio.writes)
+
+    def test_click_releases_the_button_even_when_a_step_fails(self):
+        gpio = FakeGpioC()
+        args = types.SimpleNamespace(action="click", count=2, hold=0, gap=0)
+        original = vbus.press_button
+        calls = []
+
+        def failing_press(swd):
+            calls.append(1)
+            if len(calls) == 2:
+                raise SwdError("probe went away")
+            original(swd)
+
+        vbus.press_button = failing_press
+        try:
+            with self.assertRaises(SwdError):
+                vbus.cmd_button(gpio, args)
+        finally:
+            vbus.press_button = original
+        self.assertTrue(gpio.idr())
+
+
 class StateTests(unittest.TestCase):
     def state(self, **kw):
         base = dict(moder=0x6ABFFBCF, idr=0x8024, odr=0x8000, apb1enr1=0x05800400,

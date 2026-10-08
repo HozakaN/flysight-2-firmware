@@ -1,0 +1,528 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FlySight 2 BLE fixes</title>
+<style>
+  :root {
+    --bg: #ffffff;
+    --fg: #1d2330;
+    --muted: #5b6577;
+    --line: #dde2ea;
+    --card: #f5f7fa;
+    --accent: #0b63ce;
+    --good: #12794a;
+    --good-bg: #e6f5ec;
+    --bad: #b3261e;
+    --bad-bg: #fbe9e7;
+    --warn: #8a5a00;
+    --warn-bg: #fff4de;
+    --code-bg: #f1f3f7;
+    --code-fg: #1d2330;
+    --c-comment: #6a7488;
+    --c-key: #a626a4;
+    --c-add: #0f7a3e;
+    --c-del: #b3261e;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #12151c; --fg: #e4e8ef; --muted: #98a2b5; --line: #2a303c; --card: #1a1f29;
+      --accent: #6aa8ff; --good: #5fd08f; --good-bg: #16301f; --bad: #ff8d84; --bad-bg: #3a1a18;
+      --warn: #f0c36a; --warn-bg: #352a12; --code-bg: #1a1f29; --code-fg: #e4e8ef;
+      --c-comment: #8591a8; --c-key: #d98ae0; --c-add: #6fdc9b; --c-del: #ff8d84;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #12151c; --fg: #e4e8ef; --muted: #98a2b5; --line: #2a303c; --card: #1a1f29;
+    --accent: #6aa8ff; --good: #5fd08f; --good-bg: #16301f; --bad: #ff8d84; --bad-bg: #3a1a18;
+    --warn: #f0c36a; --warn-bg: #352a12; --code-bg: #1a1f29; --code-fg: #e4e8ef;
+    --c-comment: #8591a8; --c-key: #d98ae0; --c-add: #6fdc9b; --c-del: #ff8d84;
+  }
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0; background: var(--bg); color: var(--fg);
+    font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  main { max-width: 900px; margin: 0 auto; padding: 32px 16px 80px; }
+  h1 { font-size: 2rem; line-height: 1.2; margin: 0 0 8px; }
+  h2 { font-size: 1.45rem; margin: 2.6rem 0 0.6rem; padding-top: 1.2rem; border-top: 1px solid var(--line); }
+  h3 { font-size: 1.1rem; margin: 1.8rem 0 0.4rem; }
+  p, li { max-width: 74ch; }
+  .meta { color: var(--muted); font-size: 0.92rem; margin-bottom: 1.5rem; }
+  a { color: var(--accent); }
+  code { font: 0.88em ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; background: var(--code-bg); padding: 0.1em 0.35em; border-radius: 4px; }
+  pre {
+    background: var(--code-bg); color: var(--code-fg); border: 1px solid var(--line); border-radius: 8px;
+    padding: 12px 14px; overflow-x: auto; font: 0.84rem/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    tab-size: 4;
+  }
+  pre code { background: none; padding: 0; font: inherit; }
+  .cm { color: var(--c-comment); }
+  .kw { color: var(--c-key); }
+  .add { color: var(--c-add); }
+  .del { color: var(--c-del); }
+  .file { font: 0.8rem ui-monospace, Menlo, monospace; color: var(--muted); margin: 1rem 0 -0.4rem; }
+  .callout { border-radius: 8px; padding: 12px 16px; margin: 1.2rem 0; border: 1px solid var(--line); background: var(--card); }
+  .callout.tldr { border-left: 5px solid var(--accent); }
+  .callout.good { background: var(--good-bg); border-color: var(--good); }
+  .callout.bad { background: var(--bad-bg); border-color: var(--bad); }
+  .callout.warn { background: var(--warn-bg); border-color: var(--warn); }
+  .callout > :first-child { margin-top: 0; }
+  .callout > :last-child { margin-bottom: 0; }
+  table { border-collapse: collapse; width: 100%; margin: 1rem 0; font-size: 0.93rem; display: block; overflow-x: auto; }
+  th, td { border: 1px solid var(--line); padding: 7px 10px; text-align: left; vertical-align: top; }
+  th { background: var(--card); }
+  td.ok { color: var(--good); font-weight: 600; }
+  td.ko { color: var(--bad); font-weight: 600; }
+  .tag { display: inline-block; font-size: 0.75rem; font-weight: 600; padding: 1px 8px; border-radius: 99px; border: 1px solid var(--line); background: var(--card); }
+  .tag.ok { color: var(--good); border-color: var(--good); }
+  .tag.ko { color: var(--bad); border-color: var(--bad); }
+  .tag.warn { color: var(--warn); border-color: var(--warn); }
+  figure { margin: 1.4rem 0; }
+  figcaption { color: var(--muted); font-size: 0.88rem; margin-top: 4px; }
+  svg { width: 100%; height: auto; display: block; }
+  .pair { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 12px; }
+  svg text { font: 13px -apple-system, "Segoe UI", Roboto, sans-serif; fill: var(--fg); }
+  svg .box { fill: var(--card); stroke: var(--line); stroke-width: 1.2; }
+  svg .badbox { fill: var(--bad-bg); stroke: var(--bad); stroke-width: 1.2; }
+  svg .goodbox { fill: var(--good-bg); stroke: var(--good); stroke-width: 1.2; }
+  svg .arrow { stroke: var(--fg); stroke-width: 1.6; fill: none; }
+  svg .arrowbad { stroke: var(--bad); stroke-width: 1.6; fill: none; stroke-dasharray: 5 4; }
+  svg .arrowgood { stroke: var(--good); stroke-width: 1.8; fill: none; }
+  svg .muted { fill: var(--muted); font-size: 12px; }
+  dl dt { font-weight: 650; margin-top: 0.8rem; }
+  dl dd { margin: 0.15rem 0 0 0; max-width: 74ch; }
+  nav.toc { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 10px 18px; margin: 1.2rem 0; }
+  nav.toc ol { margin: 0.3rem 0; padding-left: 1.2rem; }
+  nav.toc li { margin: 0.1rem 0; }
+  @media (max-width: 600px) { h1 { font-size: 1.6rem; } main { padding-top: 20px; } }
+  .tl { font-size: 0.8rem; }
+  .two { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 12px; }
+  p, li, dd, dt, td, th { overflow-wrap: break-word; }
+  :not(pre) > code { overflow-wrap: anywhere; }
+  h2 .num { color: var(--muted); font-weight: 600; margin-right: 6px; }
+  h3.step { text-transform: uppercase; letter-spacing: .06em; font-size: .8rem; color: var(--accent); margin-top: 1.6rem; }
+  .where { display:inline-block; font-size:.78rem; font-weight:600; padding:1px 8px; border-radius:99px; border:1px solid var(--line); background:var(--card); margin-left:4px; }
+</style>
+</head>
+<body>
+<main>
+
+<h1>FlySight 2 firmware: three BLE fixes proposed for merge</h1>
+<div class="meta">Prepared by Guillaume Imbert &middot; 8 October 2026 &middot; checked against <code>origin/master</code> (<code>9ec7186</code>) and <code>origin/develop</code> (<code>e67ee9f</code>). The same patch applies to both.</div>
+
+<h2 id="origin">The problem that started this</h2>
+<ol>
+  <li>Pair to an unpaired Mac.</li>
+  <li>Disconnect.</li>
+  <li>Start pairing on the FlySight.</li>
+</ol>
+<table>
+  <tr><th>Expected</th><td>The FlySight is found by the Mac and the Mac is able to connect to the FlySight.</td></tr>
+  <tr><th>Actual</th><td>The Mac cannot connect to the FlySight.</td></tr>
+  <tr><th>Android</th><td>The issue does not appear on Android.</td></tr>
+  <tr><th>Hypothesis: the difference between the platforms</th><td>macOS hides the real MAC address and cannot remap it after the FlySight pairing process restarts.</td></tr>
+</table>
+<p><strong>Why start a new pairing process.</strong> To trigger advertising when the FlySight does not restart it. A bug was found about that (<a href="#b2">bug 2</a>).</p>
+
+<h2 id="found">What the investigation found</h2>
+<ul>
+  <li><strong>The bug is confirmed.</strong> After these three steps the Mac cannot connect to the FlySight, exactly as reported. It was reproduced on unmodified <code>master</code> and <code>develop</code>, and with the fix the Mac connects (<a href="#b1">bug 1</a>).</li>
+  <li><strong>Its cause is not the suspected one.</strong> The Mac does recognise the FlySight: once bonded, it shows it under one and the same identifier when the FlySight is idle, when it is back in pairing mode, and after it reboots. What fails is the connection request itself, which the FlySight's radio controller discards before the firmware hears of it.</li>
+  <li><strong>Android and iOS are not affected.</strong> An Android phone and an iPad were tested: both go through the same sequence on unmodified firmware. They connect in a different way from the Mac, which the controller accepts. The difference between the platforms is in the address the <em>host</em> connects from, not in how it identifies the FlySight.</li>
+  <li><strong>A FlySight that stops advertising</strong> was reproduced on <code>develop</code>: a pairing window that expires unused ends with no advertising at all (<a href="#b2">bug 2</a>). This one concerns every platform. On <code>develop</code> the two chain for a Mac: the bonded Mac cannot connect during the window, the window expires unused, and the FlySight goes silent.</li>
+  <li>A third, unrelated defect was found on the way (<a href="#b3">bug 3</a>).</li>
+</ul>
+<p><strong>An app-side issue, not a firmware one.</strong> For a host that is <em>not</em> bonded, the identifier does change. The FlySight advertises from a private address that changes each time advertising restarts, and only a bonded host can follow it. Before it was paired, the iPad listed the same FlySight under four different identifiers over four advertising runs. An entry obtained before pairing mode started is therefore dead once pairing mode starts: an app that still offers it, or that has saved it, waits forever on an identifier that no longer exists. This is how BLE privacy is meant to behave, so the handling belongs in the app: its scan list must only hold what is advertising now, and it should not keep a FlySight it has never connected to.</p>
+
+<table>
+  <tr><th>#</th><th>Bug</th><th>Seen on</th><th>Proposed change</th></tr>
+  <tr><td>1</td><td>A Mac that is already bonded can no longer connect, in pairing mode or idle</td><td><code>master</code>, <code>develop</code></td><td><code>app_ble.c</code>, <code>ble_count_bonded_devices()</code>: one call per bonded device</td></tr>
+  <tr><td>2</td><td>A pairing window that expires unused leaves the FlySight advertising "pairing" for about 3.5 minutes, then not advertising at all</td><td><code>develop</code>. Not on <code>master</code>: the same code is there, but the symptom does not occur (explained under bug 2)</td><td><code>app_ble.c</code>, <code>Adv_Update()</code>: one statement</td></tr>
+  <tr><td>3</td><td>The BLE keys are all zero on a first boot without <code>flysight.txt</code></td><td><code>master</code>, <code>develop</code></td><td><code>state.c</code>, <code>FS_State_Read()</code>: no early return before the keys are generated</td></tr>
+</table>
+<p>Each bug is described below as glossary, problem, proposed fix. What each commit changes in behaviour is in <a href="#changes">section 4</a>, test results in <a href="#tests">section 5</a>, the complete patch in <a href="#patch">section 6</a>.</p>
+
+<nav class="toc"><strong>Contents</strong>
+<ul>
+  <li><a href="#origin">The problem that started this</a></li>
+  <li><a href="#found">What the investigation found</a></li>
+  <li><a href="#b1">1. Bug 1: a bonded Mac can no longer connect</a></li>
+  <li><a href="#b2">2. Bug 2: an unused pairing window ends in silence</a></li>
+  <li><a href="#b3">3. Bug 3: all-zero BLE keys on a first boot without <code>flysight.txt</code></a></li>
+  <li><a href="#changes">4. Behaviour changes, commit by commit</a></li>
+  <li><a href="#tests">5. Tests</a></li>
+  <li><a href="#patch">6. Complete patch</a></li>
+</ul></nav>
+
+<!-- ================================================================== -->
+<h2 id="b1"><span class="num">1.</span>Bug 1: a bonded Mac can no longer connect</h2>
+
+<h3 class="step">Glossary</h3>
+<dl>
+  <dt>Identity address</dt>
+  <dd>The permanent address of a Bluetooth device. A Mac's is its public address.</dd>
+  <dt>Resolvable private address (RPA)</dt>
+  <dd>A temporary address that a device uses instead of its identity address, and changes regularly. It is derived from a secret key, the <em>IRK</em>; only a peer that holds the IRK can tell which device is behind it.</dd>
+  <dt>Bonding</dt>
+  <dd>Pairing, then storing the keys. Each side gives the other its identity address and its IRK.</dd>
+  <dt>Resolving list</dt>
+  <dd>A table in the radio controller: one entry per bonded peer, with its identity address and IRK, so the controller can recognise that peer's RPAs by itself. The firmware fills it in <code>ble_count_bonded_devices()</code>.</dd>
+  <dt>Privacy mode of a resolving-list entry</dt>
+  <dd>Defined by the Bluetooth specification (HCI command <em>LE Set Privacy Mode</em>). <strong>Network Privacy</strong> is the default: the controller only answers that peer when it uses an RPA, and ignores a connection request made from its identity address. <strong>Device Privacy</strong>: the controller accepts both.</dd>
+  <dt>Filter accept list</dt>
+  <dd>The list of bonded devices allowed to connect outside pairing mode. A separate mechanism from the resolving list.</dd>
+</dl>
+
+<h3 class="step">Problem</h3>
+<p><strong>What the user sees.</strong> The first pairing with a Mac works. After that, the Mac cannot connect to that FlySight again, whether the FlySight is idle or back in pairing mode. On the Mac the attempt simply never completes. The FlySight shows nothing either.</p>
+<p><strong>To reproduce</strong> (<code>master</code> or <code>develop</code>, with a macOS app using CoreBluetooth):</p>
+<ol>
+  <li>Double-press to enter pairing mode, connect from the Mac, accept the pairing request.</li>
+  <li>Disconnect.</li>
+  <li>Try to connect again from the Mac, with the FlySight idle, or after a new double-press. The connection never happens.</li>
+</ol>
+<p><strong>What the firmware sees.</strong> An instrumented build recorded every HCI event delivered to <code>SVCCTL_App_Notification()</code>. During the Mac's attempts it recorded <em>nothing at all</em>: no connection event, no failure. With the fix below, the connection event appears, and shows how the two kinds of central differ:</p>
+<pre><code><span class="cm"># Mac</span>
+LE Enhanced Connection Complete   peer = FC:B2:14:**:**:** (public address)          peer RPA = none
+<span class="cm"># Android phone (accepted with or without the fix)</span>
+LE Enhanced Connection Complete   peer = 64:9D:38:**:**:** (identity, resolved)      peer RPA = 75:D8:EE:25:A8:07
+<span class="cm"># iPad (accepted with or without the fix)</span>
+LE Enhanced Connection Complete   peer = 4C:56:9D:**:**:** (identity, resolved)      peer RPA = 45:C5:A6:6F:63:53</code></pre>
+<p>The Android phone and the iPad connect from an RPA, which the controller resolves to their identity. The Mac connects from its identity address, with no RPA.</p>
+<p><strong>Cause.</strong> Each time advertising starts, <code>ble_count_bonded_devices()</code> rebuilds the controller's tables:</p>
+<div class="file">STM32_WPAN/App/app_ble.c</div>
+<pre><code>ret = aci_gap_configure_whitelist();                               <span class="cm">// accept list  = bonded devices</span>
+ret = aci_gap_get_bonded_devices(&amp;total, devices);
+...
+ret = aci_gap_add_devices_to_resolving_list(total, rl_entries, 1); <span class="cm">// resolving list = bonded devices</span></code></pre>
+<p>Entries are added in the default Network Privacy mode. From the moment the Mac is bonded, the controller therefore drops its connection requests, because they carry its identity address. Nothing is reported to the application, which is why the bug is invisible from the firmware side.</p>
+<ul>
+  <li>The first pairing works because the resolving list is still empty.</li>
+  <li>Pairing mode does not help: it turns the accept list off, but the privacy rule belongs to the resolving list and still applies.</li>
+  <li>Android and the iPad tested are not affected, because they connect from an RPA.</li>
+</ul>
+
+<h3 class="step">Proposed fix</h3>
+<p>Put each bonded peer's entry in Device Privacy mode, right after the resolving list is filled. The list is rebuilt at every advertising start, so the setting is re-applied each time.</p>
+<div class="file">STM32_WPAN/App/app_ble.c &mdash; ble_count_bonded_devices()</div>
+<pre><code>   ret = aci_gap_add_devices_to_resolving_list(total, rl_entries, 1);
+   if (ret != BLE_STATUS_SUCCESS)
+   {
+     ...
+     return -1;
+   }
+<span class="add">+
++  // 4) Let bonded peers connect with their identity address too. Entries of the
++  //    resolving list default to Network Privacy mode, where the controller
++  //    silently ignores a connection request that does not use a resolvable
++  //    private address. A Mac connects from its public identity address
++  //    (measured on macOS 26), so without this a bonded Mac never reaches us,
++  //    in pairing mode or not.
++  for (uint8_t k = 0; k &lt; total; k++)
++  {
++    ret = hci_le_set_privacy_mode(rl_entries[k].Peer_Identity_Address_Type,
++                                  rl_entries[k].Peer_Identity_Address,
++                                  BLE_PRIVACY_MODE_DEVICE);
++    if (ret != BLE_STATUS_SUCCESS)
++    {
++      APP_DBG_MSG("hci_le_set_privacy_mode fail %x\r\n", ret);
++    }
++  }</span></code></pre>
+<p><code>BLE_PRIVACY_MODE_DEVICE</code> is a new local constant, <code>0x01</code>, the value defined by the specification.</p>
+<p><strong>What changes, and what does not.</strong> The FlySight keeps advertising with RPAs, and the accept list keeps working as before. The one thing that widens: a connection request carrying a bonded peer's identity address is now accepted at link level. Whoever sends it still cannot read or write anything, because the FlySight's characteristics require an encrypted link and encryption needs the bond keys; a link that stays idle is closed by the existing 30-second inactivity timeout.</p>
+
+<!-- ================================================================== -->
+<h2 id="b2"><span class="num">2.</span>Bug 2: an unused pairing window ends in silence</h2>
+
+<h3 class="step">Glossary</h3>
+<dl>
+  <dt>Pairing window</dt>
+  <dd>The 30 seconds after a double-press, during which <code>request_pairing</code> is set: the FlySight advertises the pairing flag (<code>01</code>) and the accept list is off.</dd>
+  <dt>Fast and low-power advertising</dt>
+  <dd><code>FS_Adv_Request(APP_BLE_FAST_ADV)</code> advertises every 80&ndash;100 ms and starts a 30-second timer. When the timer fires, <code>Adv_Update()</code> calls <code>FS_Adv_Request(APP_BLE_LP_ADV)</code>, which restarts advertising at the slow rate with no timer.</dd>
+  <dt>Limited discoverable mode</dt>
+  <dd>The stack mode used for pairing advertising (<code>aci_gap_set_limited_discoverable()</code>). The stack ends it by itself after about three minutes and raises <code>ACI_GAP_LIMITED_DISCOVERABLE_VSEVT_CODE</code>. Normal advertising (<code>aci_gap_set_undirected_connectable()</code>) has no such limit.</dd>
+  <dt>Sequencer tasks "with" and "without" HCI command</dt>
+  <dd>The two task lists in <code>app_conf.h</code>. While one HCI command waits for its answer, <code>BLE_StatusNot()</code> pauses every task of the first list; tasks of the second list keep running.</dd>
+</dl>
+
+<h3 class="step">Problem</h3>
+<p><strong>What the user sees.</strong> Double-press, then nobody connects. After 30 seconds the LED goes off as expected. But a scanner still sees the FlySight advertising "pairing mode" for another three minutes, and after that the FlySight cannot be found or reached at all, by any device, until the button is pressed again. Unplugging and replugging USB does not bring it back.</p>
+<p><strong>Measured</strong> (double-press at t = 0, nobody connects, a scanner listens for 250 s):</p>
+<table>
+  <tr><th></th><th><code>develop</code>, unmodified</th><th><code>develop</code>, with the fix</th></tr>
+  <tr><td>0 to 30 s</td><td>pairing flag <code>01</code></td><td>pairing flag <code>01</code></td></tr>
+  <tr><td>30 s to about 200 s</td><td class="ko">still flag <code>01</code>, accept list off</td><td class="ok">normal advertising, flag <code>00</code></td></tr>
+  <tr><td>after about 200 s</td><td class="ko">no advertising at all</td><td class="ok">normal advertising continues</td></tr>
+</table>
+<p><strong>Cause.</strong> When the 30-second timer fires during a pairing window:</p>
+<ol>
+  <li><code>Adv_Update()</code> calls <code>FS_Adv_Request(APP_BLE_LP_ADV)</code>. That function calls the pairing callback, which only <em>queues</em> an event for the mode task, then goes on. <code>request_pairing</code> is still 1, so advertising restarts in limited discoverable mode: pairing configuration, at the slow rate, with no timer.</li>
+  <li>The mode task then runs, leaves pairing mode (LED off) and calls <code>APP_BLE_CancelPairing()</code>. That function clears <code>request_pairing</code>, but only restarts advertising <code>if (... == APP_BLE_FAST_ADV)</code>. The state is now <code>APP_BLE_LP_ADV</code>, so advertising is left as it is.</li>
+  <li>About three minutes later the stack ends limited discoverable mode. The application does not handle that event, and no timer is running, so nothing ever starts advertising again.</li>
+</ol>
+<p><strong>Why <code>master</code> does not show it.</strong> On <code>master</code>, <code>CFG_TASK_FS_MODE_UPDATE_ID</code> is in the list of tasks <em>without</em> HCI command. The mode task is therefore not paused: it runs while <code>FS_Adv_Request()</code> is still waiting for the answer to its first command, and clears <code>request_pairing</code> just before <code>FS_Adv_Request()</code> tests it. Step 1 then starts normal advertising, by accident of timing. On <code>develop</code>, commit <code>7b57cc8</code> ("Classify mode update task as using HCI", 13 July 2026) moved the task to the other list. That change is right, since the mode task does send HCI commands, but it removed the accident, and the sequence above now happens as written. Measured: on unmodified <code>master</code> the flag returns to <code>00</code> at 30 s and advertising continues.</p>
+
+<p><strong>When it appeared.</strong> With the work that lets a central ask for a mode change over BLE. That work is commit <code>cff0b12</code> ("Add device reset and firmware update from BLE", 9 May 2026): it adds the Device State commands that reboot the device, install an uploaded firmware or request a mode, and the mode task carries them out. Two months later <code>7b57cc8</code> moved the mode task to the tasks with HCI command, presumably for that reason. Measured on <code>develop</code>, same sequence, scanner listening for 75 s:</p>
+<table>
+  <tr><th>Commit</th><th>BLE mode requests</th><th>Mode task</th><th>Result</th></tr>
+  <tr><td><code>4fd8d08</code>, the commit just before <code>7b57cc8</code></td><td>present</td><td>without HCI command</td><td class="ok">flag <code>01</code> for 30 s, then <code>00</code></td></tr>
+  <tr><td><code>7b57cc8</code></td><td>present</td><td>with HCI command</td><td class="ko">flag <code>01</code> for the whole 75 s</td></tr>
+</table>
+<p>So the symptom arrived with <code>7b57cc8</code>. The code at fault in <code>app_ble.c</code> is older than both commits; the reclassification is what exposed it.</p>
+
+<h3 class="step">Proposed fix</h3>
+<p>The pairing window ends when the fast-advertising timer fires. Clear the request at that point, before advertising is restarted:</p>
+<div class="file">STM32_WPAN/App/app_ble.c</div>
+<pre><code> static void Adv_Update(void)
+ {
+<span class="add">+  /*
++   * The fast advertising period is over, and with it any pairing window. The
++   * mode task has not left pairing mode yet at this point, so clear the request
++   * here: otherwise advertising restarts in pairing configuration (limited
++   * discoverable, pairing flag set, accept list off) and nothing restarts it in
++   * normal configuration afterwards.
++   */
++  request_pairing = 0;
++</span>
+   FS_Adv_Request(APP_BLE_LP_ADV);
+ }</code></pre>
+<p>Advertising then restarts once, directly in normal configuration. The mode task still leaves pairing mode through the same callback as before.</p>
+<p><strong>Why here.</strong> This does not depend on which task list the mode task is in, so it is correct on both branches. An earlier attempt restarted advertising from <code>APP_BLE_CancelPairing()</code> when the state is <code>APP_BLE_LP_ADV</code>; it worked on <code>develop</code>, but on <code>master</code> that function can run while another HCI command is still pending, so it was dropped.</p>
+<p><strong>Possible addition, not included:</strong> handling <code>ACI_GAP_LIMITED_DISCOVERABLE_VSEVT_CODE</code> by restarting normal advertising would guarantee the FlySight can never stay silent, whatever path leads there.</p>
+
+<!-- ================================================================== -->
+<h2 id="b3"><span class="num">3.</span>Bug 3: all-zero BLE keys on a first boot without <code>flysight.txt</code></h2>
+
+<h3 class="step">Glossary</h3>
+<dl>
+  <dt><code>BLE_IRK</code> and <code>BLE_ERK</code></dt>
+  <dd>The two root keys stored in <code>flysight.txt</code> and given to the stack at start-up (<code>CONFIG_DATA_IR_OFFSET</code>, <code>CONFIG_DATA_ER_OFFSET</code>). The first one determines how bonded devices recognise the FlySight; the second one is used for the link keys. <code>FS_State_Read()</code> generates them randomly when they are all zero.</dd>
+</dl>
+
+<h3 class="step">Problem</h3>
+<p><code>FS_State_Read()</code> returns as soon as <code>flysight.txt</code> cannot be opened, before the code that generates the keys:</p>
+<div class="file">FlySight/state.c</div>
+<pre><code>memset(state.ble_irk, 0, CONFIG_DATA_IR_LEN);
+memset(state.ble_erk, 0, CONFIG_DATA_ER_LEN);
+...
+if (f_open(&amp;stateFile, "/flysight.txt", FA_READ) != FR_OK)
+    return;                                  <span class="cm">// keys stay all zero for this boot</span>
+...
+<span class="cm">/* Initialize IRK if needed */</span>             <span class="cm">// never reached in that case</span>
+while (is_all_zeros(state.ble_irk, CONFIG_DATA_IR_LEN)) { ... }</code></pre>
+<p>So on a first boot with no file (a new card, or a file deleted to reset the device, which <code>Docs/ble.md</code> suggests), the stack runs with all-zero root keys and the new <code>flysight.txt</code> is written with zeros. At the following boot the file exists, the zeros are replaced by random keys, and the FlySight's identity changes. A device bonded during that first boot can be expected not to recognise the FlySight afterwards. The device ID is skipped the same way.</p>
+<p><strong>Measured:</strong> delete <code>flysight.txt</code>, reboot: the recreated file contains <code>BLE_IRK: 0000&hellip;0000</code>. With the fix it contains random keys, unchanged after another reboot. The effect on an existing bond was not measured.</p>
+
+<h3 class="step">Proposed fix</h3>
+<p>Move the end of the function (device ID, key generation) into a helper called on both paths:</p>
+<div class="file">FlySight/state.c</div>
+<pre><code><span class="add">+static void FS_State_Complete(void)
++{
++	/* Get device ID */
++	...
++	/* Initialize IRK if needed */
++	...
++	/* Initialize ERK if needed */
++	...
++}
++</span>
+ void FS_State_Read(void)
+ {
+ 	...
+ 	if (f_open(&amp;stateFile, "/flysight.txt", FA_READ) != FR_OK)
+<span class="add">+	{
++		/* No state file yet: the keys must still be generated, or this boot would run
++		   with all-zero root keys and the next one with different ones */
++		FS_State_Complete();
+ 		return;
++	}</span>
+ 	...
+ 	f_close(&amp;stateFile);
+<span class="del">-	/* Get device ID */ ... /* Initialize IRK if needed */ ... /* Initialize ERK if needed */ ...</span>
+<span class="add">+	FS_State_Complete();</span>
+ }</code></pre>
+
+<!-- ================================================================== -->
+<h2 id="changes"><span class="num">4.</span>Behaviour changes, commit by commit</h2>
+<p>Each fix is one commit. This section lists what a user or a host sees differently once each commit is applied, and what stays the same. "Measured" refers to the tests of <a href="#tests">section 5</a>.</p>
+<table>
+  <tr><th>Commit</th><th>macOS</th><th>iOS (iPad)</th><th>Android</th></tr>
+  <tr><td><strong>1.</strong> Accept bonded centrals that connect from their identity address</td><td class="ok">A bonded Mac can connect again, with the FlySight idle or in pairing mode. Before: never</td><td>No change: connects before and after</td><td>No change: connects before and after</td></tr>
+  <tr><td><strong>2.</strong> Clear the pairing request when the fast advertising period ends</td><td colspan="3">Same on every platform, on <code>develop</code>: after a pairing window that nobody used, the FlySight stays reachable (before: unreachable after about 3.5 minutes), and pairing is only possible during the 30 seconds (before: for about 3.5 minutes). No visible change on <code>master</code>.</td></tr>
+  <tr><td><strong>3.</strong> Generate the BLE keys when flysight.txt cannot be opened</td><td colspan="3">Same on every platform: a boot without <code>flysight.txt</code> uses real keys, which stay the same afterwards (before: all-zero keys, replaced at the next boot).</td></tr>
+</table>
+
+<h3>Commit 1: Accept bonded centrals that connect from their identity address</h3>
+<p>Applies to <code>master</code> and <code>develop</code>.</p>
+<table>
+  <tr><th>Situation</th><th>Before</th><th>After</th><th>Basis</th></tr>
+  <tr><td>A bonded Mac connects, FlySight idle or in pairing mode</td><td class="ko">Never connects. The Mac times out and the firmware receives no event</td><td class="ok">Connects. The link is encrypted with the existing bond, with no new pairing request</td><td>Measured, <code>master</code> and <code>develop</code></td></tr>
+  <tr><td>A bonded Android phone or iPad connects, FlySight idle or in pairing mode</td><td>Connects</td><td>Connects, no change</td><td>Measured, <code>master</code> and <code>develop</code></td></tr>
+  <tr><td>First pairing of a host</td><td>Works</td><td>Works, no change</td><td>By design: the new call only concerns devices that are already bonded. Checked with Android, with and without the commit</td></tr>
+  <tr><td>A device that is not a bonded host sends a connection request carrying a bonded host's identity address</td><td>Ignored by the controller</td><td>Accepted at link level. It cannot read or write anything, because that needs an encrypted link and so the bond keys; the idle link is closed by the existing 30-second inactivity timeout</td><td>By design of Device Privacy mode. Not tested</td></tr>
+  <tr><td>Advertising (address, rate, flag) and accept list</td><td colspan="2">No change</td><td>By the code</td></tr>
+</table>
+
+<h3>Commit 2: Clear the pairing request when the fast advertising period ends</h3>
+<p>Visible on <code>develop</code>. The sequence is: double-press, then nobody connects.</p>
+<table>
+  <tr><th>Time after the double-press</th><th>Before (<code>develop</code>)</th><th>After</th><th>Basis</th></tr>
+  <tr><td>0 to 30 s</td><td colspan="2">Pairing advertising, flag <code>01</code>: any device may connect and pair. No change</td><td>Measured</td></tr>
+  <tr><td>30 s to about 3.5 min</td><td class="ko">Still pairing advertising, flag <code>01</code>, although the LED is off. The accept list is still off, so a device that is not bonded can still connect and pair</td><td class="ok">Normal advertising, flag <code>00</code>. Only bonded devices are accepted</td><td>Flag: measured. Accept list: from the code</td></tr>
+  <tr><td>After about 3.5 min</td><td class="ko">No advertising. No host can find or reach the FlySight: a bonded iPad could not connect at t = 246 s. A new double-press brought it back, and the iPad connected 2.5 s later</td><td class="ok">Normal advertising continues. A bonded iPad connected at t = 246 s, in 1.3 s</td><td>Measured</td></tr>
+</table>
+<table>
+  <tr><th>Situation</th><th>Before</th><th>After</th><th>Basis</th></tr>
+  <tr><td>A host connects within the 30 seconds</td><td>Works</td><td>Works, no change</td><td>Measured: Android, iPad, and the Mac once commit 1 is applied</td></tr>
+  <tr><td>Same sequence on <code>master</code></td><td>Flag <code>00</code> at 30 s, advertising continues</td><td>Same, no visible change</td><td>Measured</td></tr>
+</table>
+<p><strong>One thing users may notice on <code>develop</code>.</strong> Without this commit, someone who took longer than 30 seconds to pair still succeeded, for up to about 3.5 minutes after the double-press. With it, a new double-press is needed after 30 seconds, which is what <code>master</code> already does and what <code>Docs/ble.md</code> describes.</p>
+
+<h3>Commit 3: Generate the BLE keys when flysight.txt cannot be opened</h3>
+<p>Applies to <code>master</code> and <code>develop</code>.</p>
+<table>
+  <tr><th>Situation</th><th>Before</th><th>After</th><th>Basis</th></tr>
+  <tr><td>Boot without <code>flysight.txt</code></td><td class="ko">BLE starts with all-zero <code>BLE_IRK</code> and <code>BLE_ERK</code>, and the file is written with zeros</td><td class="ok">BLE starts with random keys, and the file is written with them</td><td>Measured (contents of the file)</td></tr>
+  <tr><td>The boot after that</td><td class="ko">Random keys replace the zeros: the FlySight's identity changes</td><td class="ok">Same keys as at the first boot</td><td>Measured (contents of the file)</td></tr>
+  <tr><td>A host bonded during that first boot</td><td>Expected to lose the FlySight after the reboot</td><td>Expected to keep it</td><td>Not measured</td></tr>
+  <tr><td>Device ID during that first boot</td><td>Not read</td><td>Read</td><td>From the code</td></tr>
+  <tr><td>Boot with an existing <code>flysight.txt</code></td><td colspan="2">No change</td><td>From the code: same statements in the same order</td></tr>
+</table>
+<p>The branch also carries commits that add test tooling under <code>Scripts/cli</code>. They do not touch the firmware.</p>
+
+<!-- ================================================================== -->
+<h2 id="tests"><span class="num">5.</span>Tests</h2>
+<p><strong>Bench.</strong> One FlySight 2 on an ST-Link, a MacBook Pro (macOS 26.3.2), a Pixel 10 Pro Fold (Android 17) and an iPad Pro (iPadOS 26.6.1). A script drives the board over SWD (button presses and, when the USB cable is connected, a simulated unplug). On the Mac, a small CoreBluetooth program scans, connects, and reads <code>FT_Packet_In</code>; on Android and on the iPad, the SkyGames app. The Mac and the phone were both bonded with the board before these runs; the iPad was paired during the second series.</p>
+<p id="table-a"><strong>Table A. USB cable connected, <code>master</code>.</strong> Unplugging is simulated by forcing the VBUS detection pin low over SWD.</p>
+<table>
+  <tr><th>Firmware</th><th>Mac connects, FlySight idle</th><th>Mac connects, FlySight in pairing mode</th><th>Android app connects, pairing mode and idle</th><th>Pairing window left to expire</th></tr>
+  <tr><td><code>master</code> <code>9ec7186</code>, unmodified</td><td class="ko">never connects</td><td class="ko">never connects</td><td class="ok">connects in both</td><td class="ok"><code>01</code> for 30 s, then <code>00</code>, still advertising at 249 s</td></tr>
+  <tr><td><code>master</code> + patch</td><td class="ok">connects, encrypted read OK</td><td class="ok">connects, encrypted read OK</td><td class="ok">connects in both</td><td class="ok"><code>01</code> for 30 s, then <code>00</code>, still advertising at 247 s</td></tr>
+</table>
+<p>"Encrypted read OK" means the link was encrypted with the existing bond, with no new pairing request. Both patched builds compile with no new warning.</p>
+<p id="table-b"><strong>Table B. Same tests with the USB cable physically unplugged.</strong> The four builds were run with the board on its battery and only the ST-Link attached, and with the iPad added. These are <code>master</code> and <code>develop</code> exactly as published, and each with this patch and nothing else (apart from the debugger flag listed under Limits).</p>
+<table>
+  <tr><th>Firmware</th><th>Mac connects, FlySight idle</th><th>Mac connects, FlySight in pairing mode</th><th>Android app connects, pairing mode and idle</th><th>iPad app connects, pairing mode and idle</th><th>Pairing window left to expire</th></tr>
+  <tr><td><code>master</code> <code>9ec7186</code>, unmodified</td><td class="ko">never connects</td><td class="ko">never connects</td><td class="ok">connects in both</td><td class="ok">connects in both</td><td class="ok"><code>01</code> for 30 s, then <code>00</code>, still advertising at 246 s</td></tr>
+  <tr><td><code>master</code> + patch</td><td class="ok">connects, encrypted read OK</td><td class="ok">connects, encrypted read OK</td><td class="ok">connects in both</td><td class="ok">connects in both</td><td class="ok"><code>01</code> for 30 s, then <code>00</code>, still advertising at 244 s</td></tr>
+  <tr><td><code>develop</code> <code>e67ee9f</code>, unmodified</td><td class="ko">never connects</td><td class="ko">never connects</td><td class="ok">connects in both</td><td class="ok">connects in both</td><td class="ko"><code>01</code> for 194 s, then no advertising</td></tr>
+  <tr><td><code>develop</code> + patch</td><td class="ok">connects, encrypted read OK</td><td class="ok">connects, encrypted read OK</td><td class="ok">connects in both</td><td class="ok">connects in both</td><td class="ok"><code>01</code> for 30 s, then <code>00</code>, still advertising at 248 s</td></tr>
+</table>
+<p><strong>iPad.</strong> The iPad held no bond with this board. The first pairing was done on an instrumented build with the Device Privacy call switched off: double-press, scan in the app, select the FlySight, accept the pairing request. The firmware recorded a connection from an RPA and a successful pairing. From then on the iPad reconnected in 1 to 4 seconds in every case tried: FlySight idle, FlySight back in pairing mode, after a FlySight reboot, with the Device Privacy call off and on, and on the four builds of <a href="#table-b">table B</a>. The app kept using the same identifier throughout.</p>
+<p>The unused pairing window was also tried from the iPad, bonded, on the two <code>develop</code> builds: double-press, nothing connects, and the app's Connect button is pressed 246 s later. Unmodified: no connection within 25 s, then a new double-press and the iPad connected 2.5 s after it. With the patch: connected in 1.3 s.</p>
+<p>Before that pairing, the app's scan listed this FlySight under a new identifier after each advertising restart (four identifiers over four runs). Two connection attempts made with an identifier obtained before the double-press never reached the FlySight: the firmware recorded no connection during the 30-second window.</p>
+<p><strong>Android.</strong> The phone was already bonded with the board for the runs of <a href="#table-a">table A</a> and <a href="#table-b">table B</a>; "connects" means the app shows the device as connected. A first pairing from the phone, followed by a new pairing window and a reconnection, was also done on an instrumented build with the Device Privacy call switched off, then on: it works in both cases.</p>
+<p><strong>Bug 1, same boot and same bond.</strong> On that instrumented build, switching only the Device Privacy call: on, the Mac connects (idle and pairing mode); off, it does not and the firmware records no event; on again, it connects.</p>
+<div class="callout warn">
+<p><strong>Limits.</strong></p>
+<ul>
+  <li>One board, one Mac, one Android phone, one iPad. No iPhone, and no older iOS version.</li>
+  <li>The Mac's failures with the FlySight idle were measured with a bond that already existed, including straight after a boot. A brand-new pairing on unmodified firmware followed at once by an idle attempt was not done.</li>
+  <li>No radio capture: that the controller drops the Mac's request is deduced from the absence of any event, the address the Mac is seen using, and the on/off/on comparison.</li>
+  <li>Bug 3 was tested on a working branch whose <code>state.c</code> is identical to <code>master</code> and <code>develop</code>, not on those builds themselves.</li>
+  <li>All test builds had <code>CFG_DEBUGGER_SUPPORTED</code> set to 1, which the SWD-driven bench needs.</li>
+  <li>In <a href="#table-a">table A</a> the USB cable stayed connected and unplugging was simulated by forcing the VBUS detection pin low over SWD; only <code>master</code> was run that way. <a href="#table-b">Table B</a> has all four builds with the cable really unplugged.</li>
+  <li>On the iPad, the connection address was recorded on the instrumented build only; on the four builds of <a href="#table-b">table B</a> the result is what the app shows.</li>
+</ul>
+</div>
+
+<!-- ================================================================== -->
+<h2 id="patch"><span class="num">6.</span>Complete patch</h2>
+<p>Two source files, 54 lines added, 16 removed, plus one line in <code>Docs/ble.md</code>. The hunks below are from <code>develop</code>; on <code>master</code> only the line numbers differ.</p>
+<p>Each fix is a separate commit, so they can be taken one by one:</p>
+<ul>
+  <li>Bug 1: <em>Accept bonded centrals that connect from their identity address</em> (<code>app_ble.c</code>, <code>Docs/ble.md</code>)</li>
+  <li>Bug 2: <em>Clear the pairing request when the fast advertising period ends</em> (<code>app_ble.c</code>)</li>
+  <li>Bug 3: <em>Generate the BLE keys when flysight.txt cannot be opened</em> (<code>state.c</code>)</li>
+</ul>
+<div class="file">STM32_WPAN/App/app_ble.c</div>
+<pre><code>@@ -199,6 +199,8 @@
+ #define BD_ADDR_SIZE_LOCAL    6
+ 
+<span class="add">+#define BLE_PRIVACY_MODE_DEVICE   0x01 /**&lt; Peer may use its identity address too */
++</span>
+ /* USER CODE BEGIN PD */
+@@ -1471,6 +1473,15 @@
+ static void Adv_Update(void)
+ {
+<span class="add">+  /*
++   * The fast advertising period is over, and with it any pairing window. The
++   * mode task has not left pairing mode yet at this point, so clear the request
++   * here: otherwise advertising restarts in pairing configuration (limited
++   * discoverable, pairing flag set, accept list off) and nothing restarts it in
++   * normal configuration afterwards.
++   */
++  request_pairing = 0;
++</span>
+   FS_Adv_Request(APP_BLE_LP_ADV);
+ }
+@@ -1651,6 +1662,23 @@
+     APP_DBG_MSG("aci_gap_add_devices_to_resolving_list fail %x\r\n", ret);
+     return -1;
+   }
+<span class="add">+
++  // 4) Let bonded peers connect with their identity address too. Entries of the
++  //    resolving list default to Network Privacy mode, where the controller
++  //    silently ignores a connection request that does not use a resolvable
++  //    private address. A Mac connects from its public identity address
++  //    (measured on macOS 26), so without this a bonded Mac never reaches us,
++  //    in pairing mode or not.
++  for (uint8_t k = 0; k &lt; total; k++)
++  {
++    ret = hci_le_set_privacy_mode(rl_entries[k].Peer_Identity_Address_Type,
++                                  rl_entries[k].Peer_Identity_Address,
++                                  BLE_PRIVACY_MODE_DEVICE);
++    if (ret != BLE_STATUS_SUCCESS)
++    {
++      APP_DBG_MSG("hci_le_set_privacy_mode fail %x\r\n", ret);
++    }
++  }</span>
+ 
+   APP_DBG_MSG("Resolving List populated with %u bonded device(s)\r\n", total);</code></pre>
+<div class="file">FlySight/state.c</div>
+<pre><code>@@ -139,6 +139,26 @@
+<span class="add">+static void FS_State_Complete(void)
++{
++	/* Get device ID */
++	state.device_id[0] = HAL_GetUIDw0();
++	state.device_id[1] = HAL_GetUIDw1();
++	state.device_id[2] = HAL_GetUIDw2();
++
++	/* Initialize IRK if needed */
++	while (is_all_zeros(state.ble_irk, CONFIG_DATA_IR_LEN))
++	{
++		FS_Common_GetRandomBytes((uint32_t *) state.ble_irk, CONFIG_DATA_IR_LEN / 4);
++	}
++
++	/* Initialize ERK if needed */
++	while (is_all_zeros(state.ble_erk, CONFIG_DATA_ER_LEN))
++	{
++		FS_Common_GetRandomBytes((uint32_t *) state.ble_erk, CONFIG_DATA_ER_LEN / 4);
++	}
++}
++</span>
+ void FS_State_Read(void)
+@@ -161,7 +181,12 @@
+ 	if (f_open(&amp;stateFile, "/flysight.txt", FA_READ) != FR_OK)
+<span class="add">+	{
++		/* No state file yet: the keys must still be generated, or this boot would run
++		   with all-zero root keys and the next one with different ones */
++		FS_State_Complete();
+ 		return;
++	}</span>
+@@ -219,22 +244,7 @@
+ 	f_close(&amp;stateFile);
+ 
+<span class="del">-	/* Get device ID */
+-	state.device_id[0] = HAL_GetUIDw0();
+-	... (the lines now in FS_State_Complete)</span>
+<span class="add">+	FS_State_Complete();</span>
+ }</code></pre>
+
+</main>
+</body>
+</html>

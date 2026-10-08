@@ -50,6 +50,8 @@ GPIOA_ODR = GPIOA + 0x14
 GPIOA_BSRR = GPIOA + 0x18
 VBUS_PIN = 2
 VBUS_BIT = 1 << VBUS_PIN
+GPIOC = 0x48000800
+BUTTON_PIN = 12                       # BUTTON_Pin on GPIOC, pressed when low
 MODER_MASK = 0b11 << (2 * VBUS_PIN)   # PA0..PA3 live in byte 0 of MODER
 MODER_OUTPUT = 0b01 << (2 * VBUS_PIN)
 
@@ -222,27 +224,50 @@ def clear_faults(swd):
     return not any(swd.read((SCB_CFSR, 32), (SCB_HFSR, 32)))
 
 
+def drive_low(swd, base, pin, name):
+    """Drive a GPIO low by switching it to an output (what an unplug or a button press looks like)."""
+    moder_addr = base + pin // 4                 # byte of MODER holding this pin's two bits
+    shift = 2 * (pin % 4)
+    mask, output, bit = 0b11 << shift, 0b01 << shift, 1 << pin
+    moder, odr = swd.read((moder_addr, 8), (base + 0x14, 32))
+    if odr & bit:
+        # BSRR is write-only, so the programmer reports a bogus verify error
+        swd.write32(base + 0x18, bit << 16, check=False)
+    swd.write8(moder_addr, (moder & ~mask & 0xFF) | output)
+
+    moder, idr = swd.read((moder_addr, 8), (base + 0x10, 32))
+    if (moder & mask) != output or idr & bit:
+        raise SwdError(f"could not drive {name} low (did the firmware reconfigure the pin?)")
+
+
+def release_pin(swd, base, pin, name):
+    """Give a GPIO back to the hardware (input)."""
+    moder_addr = base + pin // 4
+    mask, output = 0b11 << (2 * (pin % 4)), 0b01 << (2 * (pin % 4))
+    moder, = swd.read((moder_addr, 8))
+    swd.write8(moder_addr, moder & ~mask & 0xFF)
+
+    moder, = swd.read((moder_addr, 8))
+    if (moder & mask) == output:
+        raise SwdError(f"could not release {name}")
+
+
 def force_unplugged(swd):
     """Make the firmware see VBUS low."""
-    moder, odr = swd.read((GPIOA_MODER, 8), (GPIOA_ODR, 32))
-    if odr & VBUS_BIT:
-        # BSRR is write-only, so the programmer reports a bogus verify error
-        swd.write32(GPIOA_BSRR, VBUS_BIT << 16, check=False)
-    swd.write8(GPIOA_MODER, (moder & ~MODER_MASK) | MODER_OUTPUT)
-
-    moder, idr = swd.read((GPIOA_MODER, 32), (GPIOA_IDR, 32))
-    if (moder & MODER_MASK) != MODER_OUTPUT or idr & VBUS_BIT:
-        raise SwdError("could not drive PA2 low (did the firmware reconfigure the pin?)")
+    drive_low(swd, GPIOA, VBUS_PIN, "PA2")
 
 
 def release_vbus(swd):
     """Give PA2 back to the real VBUS."""
-    moder, = swd.read((GPIOA_MODER, 8))
-    swd.write8(GPIOA_MODER, moder & ~MODER_MASK)
+    release_pin(swd, GPIOA, VBUS_PIN, "PA2")
 
-    moder, = swd.read((GPIOA_MODER, 32))
-    if (moder & MODER_MASK) == MODER_OUTPUT:
-        raise SwdError("could not release PA2")
+
+def press_button(swd):
+    drive_low(swd, GPIOC, BUTTON_PIN, "PC12")
+
+
+def release_button(swd):
+    release_pin(swd, GPIOC, BUTTON_PIN, "PC12")
 
 
 def reset_probe(programmer):
@@ -465,6 +490,28 @@ def cmd_cycle(swd, args):
     return 1 if failures else 0
 
 
+def cmd_button(swd, args):
+    if args.action == "press":
+        press_button(swd)
+        print("button held down (PC12 low); `button release` lets go")
+        return 0
+    if args.action == "release":
+        release_button(swd)
+        print("button released")
+        return 0
+    try:
+        for i in range(args.count):
+            press_button(swd)
+            time.sleep(args.hold)
+            release_button(swd)
+            if i + 1 < args.count:
+                time.sleep(args.gap)
+    finally:
+        release_button(swd)
+    print(f"button clicked {args.count}x")
+    return 0
+
+
 def cmd_reset(swd, args):
     swd.reset()
     print("target reset (PA2 override, if any, is gone)")
@@ -520,6 +567,14 @@ def build_parser():
     p.add_argument("--on", type=float, default=1.0, help="seconds plugged between cycles (default 1)")
     p.add_argument("--keep-going", action="store_true", help="do not stop at the first failure")
     p.set_defaults(func=cmd_cycle)
+
+    p = sub.add_parser("button", help="press the user button (PC12). Only the sleep mode reacts to it, "
+                                      "so `unplug` first: two clicks start BLE pairing mode")
+    p.add_argument("action", nargs="?", default="click", choices=["click", "press", "release"])
+    p.add_argument("-n", "--count", type=int, default=2, help="clicks (default 2 = pairing mode)")
+    p.add_argument("--hold", type=float, default=0.15, help="seconds each press lasts (default 0.15)")
+    p.add_argument("--gap", type=float, default=0.25, help="seconds between clicks (default 0.25)")
+    p.set_defaults(func=cmd_button)
 
     p = sub.add_parser("reset-probe", help="USB-reset a stuck ST-Link (not the target)")
     p.set_defaults(func=cmd_reset_probe)
