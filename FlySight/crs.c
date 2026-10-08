@@ -456,6 +456,13 @@ static FS_CRS_State_t FS_CRS_State_Read(void)
 						HW_TS_Start(ack_timer_id, TX_TIMEOUT_TICKS);
 					}
 				}
+
+				if (next_ack == last_packet)
+				{
+					// The whole file is acknowledged. A packet waiting behind
+					// this one is a new command: leave it for the idle state
+					next_state = FS_CRS_STATE_IDLE;
+				}
 				break;
 			}
 		}
@@ -510,6 +517,9 @@ static FS_CRS_State_t FS_CRS_State_Read(void)
 
 		// De-initialize disk
 		FS_ResourceManager_ReleaseResource(FS_RESOURCE_FATFS);
+
+		// Call update task, in case a command is already waiting
+		UTIL_SEQ_SetTask(1<<CFG_TASK_FS_CRS_UPDATE_ID, CFG_SCH_PRIO_1);
 	}
 
 	return next_state;
