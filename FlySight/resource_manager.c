@@ -26,6 +26,9 @@
 #include "app_fatfs.h"
 #include "resource_manager.h"
 
+// Time VCC stays off once disabled, so that the rail discharges
+#define VCC_OFF_MSEC 50
+
 typedef struct {
 	FS_ResourceManager_Result_t (*Init)(void);
 	void (*DeInit)(void);
@@ -78,6 +81,11 @@ static void VCC_DeInit(void)
 
 			/* Reset GNSS_SAFEBOOT_N */
 			HAL_GPIO_WritePin(GNSS_SAFEBOOT_N_GPIO_Port, GNSS_SAFEBOOT_N_Pin, GPIO_PIN_RESET);
+
+			/* Keep VCC off until the rail has discharged. A microSD card
+			 * powered again about 1 ms after losing power does not restart
+			 * cleanly, and the mount that follows fails */
+			HAL_Delay(VCC_OFF_MSEC);
 		}
 	}
 	else
