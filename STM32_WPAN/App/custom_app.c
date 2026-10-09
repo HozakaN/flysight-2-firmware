@@ -115,6 +115,7 @@ static void Custom_CRS_OnConnect(Custom_App_ConnHandle_Not_evt_t *pNotification)
 static void Custom_CRS_OnDisconnect(void);
 static void Custom_CRS_OnRxWrite(Custom_STM_App_Notification_evt_t *pNotification);
 static void Custom_App_Timeout(void);
+static void Custom_VBAT_Refresh(void);
 /* USER CODE END PFP */
 
 /* Functions Definition ------------------------------------------------------*/
@@ -288,9 +289,9 @@ void Custom_STM_App_Notification(Custom_STM_App_Notification_evt_t *pNotificatio
     case CUSTOM_STM_BATTERY_LEVEL_READ_EVT:
       /* USER CODE BEGIN CUSTOM_STM_BATTERY_LEVEL_READ_EVT */
       APP_DBG_MSG("CUSTOM_STM_BATTERY_LEVEL_READ_EVT received\n");
-      // The actual calculation and update should happen when FS_VBAT_ValueReady_Callback runs,
-      // or we need a way to trigger FS_VBAT_ValueReady_Callback or get the latest value here.
-      // For simplicity, let's assume current_battery_level_percent is up-to-date.
+      // FS_VBAT_ValueReady_Callback keeps current_battery_level_percent up-to-date in
+      // active mode only. In the other modes the battery is measured here.
+      Custom_VBAT_Refresh();
       Custom_STM_App_Update_Char(CUSTOM_STM_BATTERY_LEVEL, &current_battery_level_percent);
       /* USER CODE END CUSTOM_STM_BATTERY_LEVEL_READ_EVT */
       break;
@@ -300,6 +301,7 @@ void Custom_STM_App_Notification(Custom_STM_App_Notification_evt_t *pNotificatio
       APP_DBG_MSG("CUSTOM_STM_BATTERY_LEVEL_NOTIFY_ENABLED_EVT received\n");
       Custom_App_Context.Battery_level_Notification_Status = 1;
       // Optionally, send the current level immediately upon enabling notifications
+      Custom_VBAT_Refresh();
       Custom_STM_App_Update_Char(CUSTOM_STM_BATTERY_LEVEL, &current_battery_level_percent);
       /* USER CODE END CUSTOM_STM_BATTERY_LEVEL_NOTIFY_ENABLED_EVT */
       break;
@@ -559,6 +561,27 @@ static uint8_t calculate_battery_percentage(uint16_t voltage_mv) {
     percentage = ((int32_t)voltage_mv - MIN_VOLTAGE_MV) * 100 / (MAX_VOLTAGE_MV - MIN_VOLTAGE_MV);
   }
   return (uint8_t)percentage;
+}
+
+/* Outside active mode nothing measures the battery: the level would stay at 0 after
+ * a start, and at the last value of the last active mode after that. */
+static void Custom_VBAT_Refresh(void)
+{
+  uint16_t voltage_mv;
+
+  if ((FS_Mode_State() != FS_MODE_STATE_ACTIVE) && FS_VBAT_Measure(&voltage_mv))
+  {
+    current_battery_level_percent = calculate_battery_percentage(voltage_mv);
+  }
+}
+
+/* A bonded host keeps its subscription to the battery level from one link to the next,
+ * and some never read it or subscribe again (Windows). Called once the link is encrypted:
+ * the stack notifies the level to a host that subscribed. */
+void Custom_VBAT_Notify(void)
+{
+  Custom_VBAT_Refresh();
+  Custom_STM_App_Update_Char(CUSTOM_STM_BATTERY_LEVEL, &current_battery_level_percent);
 }
 
 void Custom_VBAT_Update(const FS_VBAT_Data_t *current)

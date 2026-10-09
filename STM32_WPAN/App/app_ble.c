@@ -861,7 +861,18 @@ SVCCTL_UserEvtFlowStatus_t SVCCTL_App_Notification(void *p_Pckt)
       break; /* HCI_VENDOR_SPECIFIC_DEBUG_EVT_CODE */
 
       /* USER CODE BEGIN EVENT_PCKT */
+    case HCI_ENCRYPTION_CHANGE_EVT_CODE:
+      {
+        hci_encryption_change_event_rp0 *p_encryption_change = (hci_encryption_change_event_rp0 *) p_event_pckt->data;
 
+        if ((p_encryption_change->Status == 0) && (p_encryption_change->Encryption_Enabled != 0) &&
+            (p_encryption_change->Connection_Handle == BleApplicationContext.connectionHandleCentral))
+        {
+          /* A host is back with its keys, or has just paired */
+          Custom_VBAT_Notify();
+        }
+      }
+      break; /* HCI_ENCRYPTION_CHANGE_EVT_CODE */
       /* USER CODE END EVENT_PCKT */
 
     default:

@@ -93,6 +93,7 @@ void Custom_Start_Update(uint16_t year, uint8_t month, uint8_t day,
 void Custom_Mode_Update(uint8_t newMode);
 
 void Custom_VBAT_Update(const FS_VBAT_Data_t *current);
+void Custom_VBAT_Notify(void);
 /* USER CODE END EF */
 
 #ifdef __cplusplus

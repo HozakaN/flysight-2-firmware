@@ -31,6 +31,9 @@
 #define VBAT_TIMER_MSEC     1000
 #define VBAT_TIMER_TICKS    (VBAT_TIMER_MSEC*1000/CFG_TS_TICK_VAL)
 
+/* Time allowed to a single conversion outside active mode */
+#define VBAT_CONVERSION_MSEC 10
+
 /* Value of analog reference voltage (Vref+), connected to analog voltage   */
 /* supply Vdda (unit: mV).                                                  */
 #define VDDA_APPLI                       ((uint32_t)3300)
@@ -104,6 +107,54 @@ void FS_VBAT_DeInit(void)
 	HW_TS_Delete(vbat_timer_id);
 }
 
+/**
+ * @brief  Measures the battery voltage once, outside active mode.
+ *
+ * Active mode keeps the ADC running and measures every second. In the other
+ * modes the ADC is off: it is enabled here for one conversion and disabled
+ * again. Must not be called in active mode.
+ *
+ * @param  voltage Battery voltage (mV)
+ * @retval true if the voltage was measured
+ */
+bool FS_VBAT_Measure(uint16_t *voltage)
+{
+	HAL_StatusTypeDef res;
+
+	// Enable ADC
+	MX_ADC1_Init();
+
+	// Run the ADC calibration in single-ended mode
+	res = HAL_ADCEx_Calibration_Start(&hadc1, ADC_SINGLE_ENDED);
+
+	if (res == HAL_OK)
+	{
+		// Enable battery measurement
+		HAL_GPIO_WritePin(VBAT_EN_GPIO_Port, VBAT_EN_Pin, GPIO_PIN_SET);
+
+		// Convert once
+		res = HAL_ADC_Start(&hadc1);
+		if (res == HAL_OK)
+		{
+			res = HAL_ADC_PollForConversion(&hadc1, VBAT_CONVERSION_MSEC);
+		}
+		if (res == HAL_OK)
+		{
+			// Get battery voltage
+			uint16_t temp = HAL_ADC_GetValue(&hadc1);
+			*voltage = __ADC_CALC_DATA_VOLTAGE(VDDA_APPLI, temp * 2);
+		}
+		HAL_ADC_Stop(&hadc1);
+
+		// Disable battery measurement
+		HAL_GPIO_WritePin(VBAT_EN_GPIO_Port, VBAT_EN_Pin, GPIO_PIN_RESET);
+	}
+
+	// Disable ADC
+	HAL_ADC_DeInit(&hadc1);
+
+	return res == HAL_OK;
+}
 
 void FS_VBAT_ConversionComplete(void)
 {

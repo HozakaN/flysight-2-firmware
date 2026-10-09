@@ -24,6 +24,8 @@
 #ifndef VBAT_H_
 #define VBAT_H_
 
+#include <stdbool.h>
+
 typedef struct
 {
 	uint64_t time;		// us
@@ -32,6 +34,7 @@ typedef struct
 
 void FS_VBAT_Init(void);
 void FS_VBAT_DeInit(void);
+bool FS_VBAT_Measure(uint16_t *voltage);
 
 void FS_VBAT_ConversionComplete(void);
 
