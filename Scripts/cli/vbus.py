@@ -191,8 +191,13 @@ class OpenOcd:
         self.timeout = timeout
         self._runner = runner
 
+    # interface/stlink.cfg picks the HLA driver in OpenOCD 0.12.0 and the ST-Link driver in the
+    # versions after it, and each driver has its own name for SWD.
+    TRANSPORT = ("if {[catch {transport select hla_swd}]} "
+                 "{ if {[catch {transport select swd}]} { transport select dapdirect_swd } }")
+
     def _run(self, *cmds):
-        args = [self.programmer, "-f", "interface/stlink.cfg", "-c", "transport select hla_swd"]
+        args = [self.programmer, "-f", "interface/stlink.cfg", "-c", self.TRANSPORT]
         if self.sn:
             args += ["-c", f"adapter serial {self.sn}"]
         # The stock target script switches debug in low-power modes on at every
@@ -422,6 +427,10 @@ def host_has_device(vid, pid):
             if (v, p) == want:
                 return True
         return False
+    if sys.platform == "win32":
+        out = subprocess.run(["pnputil", "/enum-devices", "/connected"],
+                             capture_output=True, text=True, errors="replace").stdout
+        return pnputil_has_device(out, vid, pid)
     return None
 
 
@@ -430,6 +439,13 @@ def ioreg_has_device(text, vid, pid):
         if re.search(rf'"idVendor" = {vid}\b', block) and re.search(rf'"idProduct" = {pid}\b', block):
             return True
     return False
+
+
+def pnputil_has_device(text, vid, pid):
+    """True if `pnputil /enum-devices /connected` lists the USB device itself. The label in
+    front of the instance ID follows the language of Windows; the ID does not. The interfaces
+    of a composite device (...&PID_xxxx&MI_00\\...) are not the device."""
+    return re.search(rf"USB\\VID_{vid:04X}&PID_{pid:04X}\\", text, re.I) is not None
 
 
 def wait_for(predicate, timeout, interval=0.05):

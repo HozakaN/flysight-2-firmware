@@ -1,0 +1,19 @@
+Test aid, not a fix: a build that forgets every bonded device at each start, once the BLE stack
+runs. Flash it, let it start, then flash the build under test: the FlySight has forgotten every
+host, and the hosts have not forgotten it.
+
+The firmware itself only does this when USB mode ends with `Reset_BLE: 1` in flysight.txt
+(`FS_State_Update()` in FlySight/state.c).
+
+--- a/STM32_WPAN/App/app_ble.c
++++ b/STM32_WPAN/App/app_ble.c
+@@ -426,6 +426,9 @@
+   Custom_APP_Init();
+ 
+   /* USER CODE BEGIN APP_BLE_Init_3 */
++  /* Test aid: forget every bonded device at each start */
++  aci_gap_clear_security_db();
++
+   /* Create timer to handle the connection state machine */
+   HW_TS_Create(CFG_TIM_PROC_ID_ISR, &Advertising_mgr_timer_Id, hw_ts_SingleShot, Adv_Update_Req);
+ #if 0

@@ -190,6 +190,9 @@ def patch_sources(root, reverse=False):
         raise TraceError("the sources are already instrumented (run `restore` first)")
 
     for path, plain, traced in PATCHES:
+        if "\r\n" in contents[path]:
+            # A checkout made on Windows (core.autocrlf): the trace takes the line ends of the file
+            plain, traced = plain.replace("\n", "\r\n"), traced.replace("\n", "\r\n")
         old, new = (traced, plain) if reverse else (plain, traced)
         found = contents[path].count(old)
         if found != 1:
@@ -249,6 +252,7 @@ class Target(Swd):
 
 
 GAP_EVENTS = {
+    0x0006: "FW_ERROR",
     0x0400: "LIMITED_DISCOVERABLE_TIMEOUT", 0x0401: "PAIRING_COMPLETE", 0x0402: "PASS_KEY_REQ",
     0x0403: "AUTHORIZATION_REQ", 0x0404: "PERIPHERAL_SECURITY_INITIATED", 0x0405: "BOND_LOST",
     0x0407: "PROC_COMPLETE", 0x0408: "ADDR_NOT_RESOLVED", 0x0409: "NUMERIC_COMPARISON",
@@ -259,6 +263,10 @@ DISCONNECT_REASONS = {
     0x05: "authentication failure", 0x06: "key missing", 0x08: "connection timeout",
     0x13: "remote user terminated", 0x16: "terminated by local host", 0x22: "LL response timeout",
     0x3D: "MIC failure", 0x3E: "failed to be established",
+}
+FW_ERRORS = {
+    0x01: "L2CAP recombination failure", 0x02: "GATT unexpected peer message", 0x03: "NVM level warning",
+    0x04: "COC RX data length too large", 0x05: "ECOC already assigned DCID",
 }
 PEER_TYPES = {0: "public", 1: "random", 2: "public identity (resolved)", 3: "random identity (resolved)"}
 QUIET_LE_SUBEVENTS = (0x03, 0x07, 0x0C)     # connection update, data length change, PHY update
@@ -293,6 +301,10 @@ def decode(index, rec):
     if kind == 6:
         code = a | b << 8
         extra = f" status={d[2]} reason=0x{d[3]:02x}" if code == 0x0401 else ""
+        if code == 0x0006:
+            # Type, length, then up to six of the bytes that come with it
+            extra = (f" type=0x{d[0]:02x} ({FW_ERRORS.get(d[0], '?')})"
+                     f" data={bytes(d[2:2 + min(d[1], 6)]).hex() or '-'}")
         return f"{index:4d} GAP/L2CAP    0x{code:04x} {GAP_EVENTS.get(code, '')}{extra}"
     if kind == 7:
         return None if a in QUIET_LE_SUBEVENTS else f"{index:4d} LE META      subevent=0x{a:02x}"

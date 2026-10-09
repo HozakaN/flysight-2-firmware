@@ -284,6 +284,14 @@ class OpenOcdTests(unittest.TestCase):
         self.ocd(stderr="0x48000000: 00 \n").read((0x48000000, 8))
         self.assertIn("stm32wbx.cpu configure -event examine-end {}", self.args)
 
+    def test_swd_is_asked_for_under_the_name_each_driver_knows(self):
+        # OpenOCD 0.12.0 drives an ST-Link through "hla_swd"; later versions through "swd"
+        self.ocd(stderr="0x48000000: 00 \n").read((0x48000000, 8))
+        transport = self.args[self.args.index("interface/stlink.cfg") + 2]
+        self.assertLess(transport.index("hla_swd"), transport.index("select swd"))
+        self.assertIn("catch", transport)
+        self.assertLess(self.args.index(transport), self.args.index("target/stm32wbx.cfg"))
+
     def test_read_bytes_joins_the_lines_of_a_dump(self):
         err = ("0x20001000: 00 01 02 03 04 05 06 07 08 09 0a 0b 0c 0d 0e 0f \n"
                "0x20001010: 10 11 12 13 \n")
@@ -374,6 +382,32 @@ class HostTests(unittest.TestCase):
     def test_vid_and_pid_must_be_on_the_same_device(self):
         text = self.IOREG.replace('"idProduct" = 14164', '"idProduct" = 1385')
         self.assertFalse(vbus.ioreg_has_device(text.split("+-o FlySight")[0], 0x16D0, 0x0569))
+
+    # What Windows 11 prints for an ST-Link, a mass-storage FlySight and one of its interfaces
+    PNPUTIL = (
+        "Instance ID:                USB\\VID_0483&PID_3754\\003F004D3234511437333934\n"
+        "Device Description:         USB Composite Device\n"
+        "Status:                     Started\n\n"
+        "Instance ID:                USB\\VID_0483&PID_3754&MI_00\\6&379B478D&0&0000\n"
+        "Device Description:         ST-Link Debug\n\n"
+        "Instance ID:                USB\\VID_16D0&PID_0569\\0123456789AB\n"
+        "Device Description:         USB Mass Storage Device\n")
+
+    def test_pnputil_device_present(self):
+        self.assertTrue(vbus.pnputil_has_device(self.PNPUTIL, 0x16D0, 0x0569))
+        self.assertTrue(vbus.pnputil_has_device(self.PNPUTIL.lower(), 0x16D0, 0x0569))
+
+    def test_pnputil_other_device_only(self):
+        self.assertFalse(vbus.pnputil_has_device(self.PNPUTIL.split("Instance ID:                USB\\VID_16D0")[0],
+                                                 0x16D0, 0x0569))
+        self.assertFalse(vbus.pnputil_has_device(self.PNPUTIL, 0x16D0, 0x0001))
+
+    def test_pnputil_an_interface_is_not_the_device(self):
+        only_interface = self.PNPUTIL.split("\n\n")[1]
+        self.assertFalse(vbus.pnputil_has_device(only_interface, 0x0483, 0x3754))
+
+    def test_pnputil_label_in_another_language(self):
+        self.assertTrue(vbus.pnputil_has_device("ID d'instance :  USB\\VID_16D0&PID_0569\\0123\n", 0x16D0, 0x0569))
 
 
 if __name__ == "__main__":

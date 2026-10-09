@@ -944,6 +944,350 @@ static FS_ResourceManager_Result_t FatFS_Init(void)                    <span cla
 </table>
 <p>In the last row a session is: a program that left its notification sessions behind, then two connections of the native library and two of the application, each reading both files. A lockup is a firmware found in <code>Error_Handler()</code> afterwards. The scripts are <code>linux/sd_power_gap.py</code>, with <code>linux/sd-power-gap-experiment.patch</code>, and <code>linux/stale_subscriber.py</code>.</p>
 
+<!-- ================================================================== -->
+<h1 id="windows">Windows: the same tests from a Windows PC, and two more bugs</h1>
+<div class="meta">Added on 9 October 2026, after the two parts above. Same board, same commits of <code>master</code> (<code>9ec7186</code>) and <code>develop</code> (<code>e67ee9f</code>), from a PC under Windows 11 Pro 25H2 (build 26200), with an Intel Bluetooth adapter.</div>
+
+<p>The tests of the two parts above were run again from Windows. What they add:</p>
+<ul>
+  <li><strong>Windows is affected by <a href="#b1">bug 1</a>, exactly as the Mac is.</strong> On unmodified <code>master</code> and <code>develop</code>, a Windows PC that is bonded can no longer connect, with the FlySight idle or in pairing mode. With the fix of bug 1 it connects. Windows is the second host for which that fix is needed.</li>
+  <li><a href="#b2">Bug 2</a> shows from Windows as from the other hosts.</li>
+  <li>What a Windows host needs in order to pair is on its own side, as on Linux, and goes in the documentation (<a href="#windows-hosts">section 11</a>).</li>
+  <li><strong>Two more firmware bugs</strong>, numbered 7 and 8 after the six above. Neither is particular to Windows: it is from Windows that they were noticed. Each has its fix in a commit of its own on the branch, outside the patch of <a href="#patch">section 6</a>.</li>
+</ul>
+<table>
+  <tr><th>#</th><th>Bug</th><th>Seen on</th><th>Proposed change</th></tr>
+  <tr><td>7</td><td>The battery level a host reads is 0&nbsp;% until the FlySight has been in active mode, and is not measured again outside it</td><td><code>develop</code> (<code>master</code> has no Battery Service)</td><td><code>vbat.c</code>, <code>custom_app.c</code>: measure the battery when its level is read outside active mode</td></tr>
+  <tr><td>8</td><td>The BLE stack has room for the bonds of three hosts, five on <code>master</code>. Pairing one more makes the FlySight forget all the others</td><td><code>master</code>, <code>develop</code></td><td><code>app_conf.h</code>, <code>CFG_BLE_OPTIONS</code>: ask the stack for its reduced record, which leaves room for fourteen</td></tr>
+</table>
+<p>Each section below is glossary, problem, proposed fix, tests.</p>
+
+<nav class="toc"><strong>Contents of the Windows part</strong>
+<ul>
+  <li><a href="#windows-hosts">11. Windows: bugs 1 and 2 from a Windows PC, and what a Windows host needs to pair</a></li>
+  <li><a href="#battery">12. Windows, bug 7: the battery level a host reads is 0&nbsp;% until the first active mode</a></li>
+  <li><a href="#bonds">13. Windows, bug 8: one host too many, and the FlySight forgets all the others</a></li>
+</ul></nav>
+
+<!-- ================================================================== -->
+<h2 id="windows-hosts"><span class="num">11.</span>Windows: bugs 1 and 2 from a Windows PC, and what a Windows host needs to pair</h2>
+
+<h3 class="step">Glossary</h3>
+<dl>
+  <dt>WinRT</dt>
+  <dd>The programming interface of Windows that an application uses for Bluetooth LE.</dd>
+  <dt>Custom pairing</dt>
+  <dd>The WinRT object (<code>DeviceInformationCustomPairing</code>) through which an application asks Windows to pair with a device and answers the request itself, instead of leaving it to a window of Windows.</dd>
+  <dt>Library, Kotlin layers, SkyGames</dt>
+  <dd>"Library" is the native BLE layer of the SkyGames desktop application, driven by a script. "Kotlin layers" is the code of the application above it, run without its window. "SkyGames" is the application itself.</dd>
+</dl>
+
+<h3 class="step">Problem</h3>
+<p><strong>Bug 1.</strong> Windows is affected by <a href="#b1">bug 1</a>. The firmware sees the PC connect from its public identity address, with no RPA, which is the kind of connection the Mac makes:</p>
+<pre><code><span class="cm"># Windows PC</span>
+LE Enhanced Connection Complete   peer = 64:5D:86:**:**:** (public address)          peer RPA = none</code></pre>
+<p>What the user sees on unmodified firmware is what a Mac user sees. On unmodified <code>master</code>, starting from a FlySight that holds no bond: the first pairing with the PC works; after that the PC cannot connect to that FlySight again, with the FlySight idle or back in pairing mode. Removing the FlySight on the PC and pairing it again does not help: the FlySight still holds the bond of the PC, and ignores the PC in pairing mode too. On the PC the link is reported up for an instant and then down, and the application goes back to its Connect button.</p>
+<p>On the instrumented build, in one boot and with one bond, switching only the Device Privacy call: off, the PC does not connect (pairing mode, then idle) and the firmware records no event; on, it connects in both. On the four builds of <a href="#table-d">table D</a> the PC does not connect to unmodified <code>master</code> and <code>develop</code>, and connects to each of them with the patch.</p>
+<p><strong>Bug 2</strong> shows from Windows exactly as from the other hosts (last column of <a href="#table-d">table D</a>).</p>
+<p><strong>The first pairing.</strong> <code>Docs/ble.md</code> advises a central to read a secure characteristic so that its system starts the pairing. Windows does not: read from an application that has not paired, <code>FT_Packet_In</code> is refused at once with "insufficient encryption" (ATT error <code>0x0F</code>), and Windows starts no pairing. The firmware records the connection and no pairing event. When the application asks Windows for the pairing and accepts it itself (custom pairing, "confirm only"), the pairing completes in 0.7 s without any window, and the PC is bonded.</p>
+
+<h3 class="step">Proposed fix</h3>
+<p>Nothing to change in the firmware beyond the fix of <a href="#b1">bug 1</a>. One line in <code>Docs/ble.md</code>, under the one of Linux, and two words in the line that describes bug 1 (commit <em>Windows: what a host needs to pair, test tools, results and log</em>):</p>
+<div class="file">Docs/ble.md</div>
+<pre><code><span class="add">+    *   **Windows (WinRT):** Reading a secure characteristic is not enough there either. The read fails at once
++        with "insufficient encryption" (ATT error `0x0F`) and Windows starts no pairing by itself. The application
++        has to ask for it after connecting, with `DeviceInformationCustomPairing.PairAsync(DevicePairingKinds.ConfirmOnly)`
++        and a `PairingRequested` handler that accepts; no window is shown. Measured on Windows 11 (build 26200):
++        after the refused read the FlySight sees no pairing at all, and the explicit request pairs in 0.7 s.</span>
+...
+<span class="del">-    ... macOS connects from its public identity address; in the default *network privacy* mode ...</span>
+<span class="add">+    ... macOS and Windows connect from their public identity address; in the default *network privacy* mode ...</span></code></pre>
+<p>In the file each is a single line; they are folded or cut here.</p>
+
+<h3 class="step">Tests</h3>
+<p id="table-d"><strong>Table D. Windows.</strong> The four builds of <a href="#table-b">table B</a>, cable unplugged, from the Windows PC, bonded with the board beforehand. The library connects, reads <code>FT_Packet_In</code> and sends a ping. The Kotlin layers connect and read the two files the application reads at each connection. For SkyGames, "connects" means it shows the device as connected and has read its configuration file.</p>
+<table>
+  <tr><th>Firmware</th><th>Library and Kotlin layers connect, FlySight idle</th><th>Library and Kotlin layers connect, FlySight in pairing mode</th><th>SkyGames app connects, pairing mode and idle</th><th>Pairing window left to expire</th></tr>
+  <tr><td><code>master</code> <code>9ec7186</code>, unmodified</td><td class="ko">never connect</td><td class="ko">never connect</td><td class="ko">connects in neither</td><td class="ok"><code>01</code> for 29 s, then <code>00</code>, still advertising at 254 s</td></tr>
+  <tr><td><code>master</code> + patch</td><td class="ok">connect, encrypted read OK, both files read</td><td class="ok">connect, encrypted read OK, both files read</td><td class="ok">connects in both</td><td class="ok"><code>01</code> for 30 s, then <code>00</code>, still advertising at 236 s</td></tr>
+  <tr><td><code>develop</code> <code>e67ee9f</code>, unmodified</td><td class="ko">never connect</td><td class="ko">never connect</td><td class="ko">connects in neither</td><td class="ko"><code>01</code> for 204 s, then no advertising</td></tr>
+  <tr><td><code>develop</code> + patch</td><td class="ok">connect, encrypted read OK, both files read</td><td class="ok">connect, encrypted read OK, both files read</td><td class="ok">connects in both</td><td class="ok"><code>01</code> for 29 s, then <code>00</code>, still advertising at 246 s</td></tr>
+</table>
+<p>The branch build went through the same pass, with the same results as the two patched builds (window <code>01</code> for 29 s, then <code>00</code>, still advertising at 246 s).</p>
+<p><strong>Bug 1 from a FlySight without any bond</strong>, on unmodified <code>master</code>, with the library. The bonds of the FlySight were cleared first by a test build that calls <code>aci_gap_clear_security_db()</code> when it starts. First pairing, FlySight in pairing mode: connected and paired in 3.5 s, encrypted read OK. Reconnection 6 s later, FlySight idle: no connection. Reconnection, FlySight in pairing mode: no connection. FlySight removed on the PC, then paired again in pairing mode: no connection, with the library and with WinRT alone, where Windows reported the link up and down six times in 4.5 s. The branch build was then flashed, with the trace: in pairing mode the PC connected and paired, and the firmware recorded the connection from the public address of the PC, the encryption, and <code>PAIRING_COMPLETE</code> with status 0.</p>
+<p>The scripts are in <code>windows/README.md</code>, next to this report.</p>
+<div class="callout warn">
+<p><strong>Limits of the tests on Windows.</strong></p>
+<ul>
+  <li>One Windows PC (Windows 11 Pro 25H2, build 26200, Intel adapter), with the same board. No other version of Windows and no other Bluetooth adapter.</li>
+  <li>On Windows the address of the PC was recorded on the instrumented build only; on the four builds of <a href="#table-d">table D</a> the result is what the scripts and the application report. The table is one pass over the four builds, in that order, each flashed once.</li>
+  <li>The sequence that starts from a FlySight without any bond was run on unmodified <code>master</code> only.</li>
+  <li>In an earlier pass, the FlySight had stopped advertising on <code>develop</code> + patch after the SkyGames steps: a scanner heard nothing from it for 262 s. The next build was flashed before its state was read. In the pass of <a href="#table-d">table D</a> it was checked after each group of connections, and it advertised every time.</li>
+  <li>The end of a pairing window is timed by a scanner on the PC, and Windows hears an idle FlySight every 10 to 13 s: "30 s" is the time during which <code>01</code> was heard, and the first <code>00</code> was heard 37 to 39 s after the double press.</li>
+  <li>As in the two parts above, all test builds had <code>CFG_DEBUGGER_SUPPORTED</code> set to 1.</li>
+</ul>
+</div>
+
+<!-- ================================================================== -->
+<h2 id="battery"><span class="num">12.</span>Windows, bug 7: the battery level a host reads is 0&nbsp;% until the first active mode</h2>
+
+<p>Noticed because Windows reads that level by itself: it told the user of the PC that the battery of the FlySight was low, when it was at 4.09&nbsp;V. It concerns <code>develop</code> and the branch; <code>master</code> has no Battery Service. One commit on the branch, <em>Measure the battery when a host asks for its level or connects</em> (<code>a039404</code>). It is not in the patch of <a href="#patch">section 6</a>.</p>
+
+<h3 class="step">Glossary</h3>
+<dl>
+  <dt>Battery Service, Battery Level</dt>
+  <dd>The standard GATT service <code>0x180F</code> and its characteristic <code>0x2A19</code>: one byte, the charge from 0 to 100&nbsp;%. A host reads it, or subscribes to its notifications.</dd>
+  <dt>Sleep mode, active mode</dt>
+  <dd>In sleep mode the FlySight advertises and waits: it is the mode in which a host connects to read its files or change its configuration. A press held for a second starts active mode, in which it logs a jump, and another one ends it.</dd>
+  <dt>Battery measurement</dt>
+  <dd><code>vbat.c</code>. The analog-to-digital converter reads the battery voltage through a divider that the pin <code>VBAT_EN</code> switches on. <code>custom_app.c</code> turns the voltage into a level: 0&nbsp;% at 3.3&nbsp;V, 100&nbsp;% at 4.2&nbsp;V, a straight line between the two.</dd>
+  <dt>Subscription of a bonded host</dt>
+  <dd>A host subscribes to notifications by writing a descriptor of the characteristic. For a bonded host the BLE stack keeps that descriptor and gives it back at each connection: the host does not have to subscribe again, and the firmware is not told.</dd>
+</dl>
+
+<h3 class="step">Problem</h3>
+<p>The level a host reads is a variable that starts at 0 and that only a battery measurement changes:</p>
+<div class="file">STM32_WPAN/App/custom_app.c</div>
+<pre><code>static uint8_t current_battery_level_percent = 0;
+...
+    case CUSTOM_STM_BATTERY_LEVEL_READ_EVT:
+      ...
+      // For simplicity, let's assume current_battery_level_percent is up-to-date.
+      Custom_STM_App_Update_Char(CUSTOM_STM_BATTERY_LEVEL, &amp;current_battery_level_percent);</code></pre>
+<p>The battery is measured in active mode only: <code>FS_ActiveMode_Init()</code> switches the converter on and starts the timer that measures every second, and <code>FS_ActiveMode_DeInit()</code> stops both. So a host reads:</p>
+<ul>
+  <li>0&nbsp;%, from the start of the FlySight until its first active mode;</li>
+  <li>after that, the last level measured in the last active mode, whatever has happened to the battery since.</li>
+</ul>
+<p><strong>Measured</strong> on <code>develop</code>. The PC read the level every 2&nbsp;s over one link, while the button took the FlySight from sleep to active mode and back; the mode, the level the firmware holds and the last voltage it measured were read over SWD.</p>
+<table>
+  <tr><th>FlySight</th><th>Level read by the PC</th><th>In the firmware (SWD)</th></tr>
+  <tr><td>Just started, in sleep mode</td><td class="ko">0&nbsp;%</td><td>level 0, no voltage measured yet</td></tr>
+  <tr><td>In active mode</td><td class="ok">83 to 87&nbsp;%</td><td>level 84, 4059&nbsp;mV</td></tr>
+  <tr><td>Back in sleep mode, for the 20&nbsp;s that followed</td><td class="ko">84&nbsp;% at every reading</td><td>level 84, 4064&nbsp;mV: the last measurement of active mode</td></tr>
+</table>
+<p>A host connects in sleep mode most of the time.</p>
+<p><strong>Windows</strong> keeps a battery level for each paired device, and warns its user when it is low. That level was read on the PC, in the properties of the device. Windows gets it when it pairs, where it subscribes to the notifications of the characteristic; at a later connection it neither reads the level nor subscribes again: it waits for a notification. The firmware never sends it one: it notifies only a host that has subscribed during the current link, and a bonded host gets its subscription back from the stack without subscribing. A PC paired with the branch, FlySight just started, held 0&nbsp;%, and still held 0&nbsp;% after a later connection.</p>
+
+<h3 class="step">Proposed fix</h3>
+<p>Two changes. When a host asks for the level and active mode is not there to measure it, measure it then: a function in <code>vbat.c</code> does one measurement the way active mode prepares its own, converter on, calibration, one conversion, converter off.</p>
+<div class="file">FlySight/vbat.c</div>
+<pre><code><span class="add">+bool FS_VBAT_Measure(uint16_t *voltage)
++{
++	HAL_StatusTypeDef res;
++
++	// Enable ADC
++	MX_ADC1_Init();
++
++	// Run the ADC calibration in single-ended mode
++	res = HAL_ADCEx_Calibration_Start(&amp;hadc1, ADC_SINGLE_ENDED);
++
++	if (res == HAL_OK)
++	{
++		// Enable battery measurement
++		HAL_GPIO_WritePin(VBAT_EN_GPIO_Port, VBAT_EN_Pin, GPIO_PIN_SET);
++
++		// Convert once
++		res = HAL_ADC_Start(&amp;hadc1);
++		if (res == HAL_OK)
++		{
++			res = HAL_ADC_PollForConversion(&amp;hadc1, VBAT_CONVERSION_MSEC);
++		}
++		if (res == HAL_OK)
++		{
++			// Get battery voltage
++			uint16_t temp = HAL_ADC_GetValue(&amp;hadc1);
++			*voltage = __ADC_CALC_DATA_VOLTAGE(VDDA_APPLI, temp * 2);
++		}
++		HAL_ADC_Stop(&amp;hadc1);
++
++		// Disable battery measurement
++		HAL_GPIO_WritePin(VBAT_EN_GPIO_Port, VBAT_EN_Pin, GPIO_PIN_RESET);
++	}
++
++	// Disable ADC
++	HAL_ADC_DeInit(&amp;hadc1);
++
++	return res == HAL_OK;
++}</span></code></pre>
+<div class="file">STM32_WPAN/App/custom_app.c</div>
+<pre><code>     case CUSTOM_STM_BATTERY_LEVEL_READ_EVT:
+       ...
+<span class="del">-      // For simplicity, let's assume current_battery_level_percent is up-to-date.</span>
+<span class="add">+      // FS_VBAT_ValueReady_Callback keeps current_battery_level_percent up-to-date in
++      // active mode only. In the other modes the battery is measured here.
++      Custom_VBAT_Refresh();</span>
+       Custom_STM_App_Update_Char(CUSTOM_STM_BATTERY_LEVEL, &amp;current_battery_level_percent);
+ ...
+     case CUSTOM_STM_BATTERY_LEVEL_NOTIFY_ENABLED_EVT:
+       ...
+<span class="add">+      Custom_VBAT_Refresh();</span>
+       Custom_STM_App_Update_Char(CUSTOM_STM_BATTERY_LEVEL, &amp;current_battery_level_percent);
+ ...
+<span class="add">+/* Outside active mode nothing measures the battery: the level would stay at 0 after
++ * a start, and at the last value of the last active mode after that. */
++static void Custom_VBAT_Refresh(void)
++{
++  uint16_t voltage_mv;
++
++  if ((FS_Mode_State() != FS_MODE_STATE_ACTIVE) &amp;&amp; FS_VBAT_Measure(&amp;voltage_mv))
++  {
++    current_battery_level_percent = calculate_battery_percentage(voltage_mv);
++  }
++}</span></code></pre>
+<p>That change alone leaves Windows as it was: with a build that had nothing else, the PC that held 0&nbsp;% still held it after a later connection, during which the FlySight went into active mode and back. So, when a link becomes encrypted, which is when a bonded host is back, give the stack the level: it notifies it to a host whose subscription it has just given back.</p>
+<div class="file">STM32_WPAN/App/app_ble.c, STM32_WPAN/App/custom_app.c</div>
+<pre><code><span class="add">+    case HCI_ENCRYPTION_CHANGE_EVT_CODE:
++      {
++        hci_encryption_change_event_rp0 *p_encryption_change = (hci_encryption_change_event_rp0 *) p_event_pckt-&gt;data;
++
++        if ((p_encryption_change-&gt;Status == 0) &amp;&amp; (p_encryption_change-&gt;Encryption_Enabled != 0) &amp;&amp;
++            (p_encryption_change-&gt;Connection_Handle == BleApplicationContext.connectionHandleCentral))
++        {
++          /* A host is back with its keys, or has just paired */
++          Custom_VBAT_Notify();
++        }
++      }
++      break; /* HCI_ENCRYPTION_CHANGE_EVT_CODE */</span>
+ ...
+<span class="add">+/* A bonded host keeps its subscription to the battery level from one link to the next,
++ * and some never read it or subscribe again (Windows). Called once the link is encrypted:
++ * the stack notifies the level to a host that subscribed. */
++void Custom_VBAT_Notify(void)
++{
++  Custom_VBAT_Refresh();
++  Custom_STM_App_Update_Char(CUSTOM_STM_BATTERY_LEVEL, &amp;current_battery_level_percent);
++}</span></code></pre>
+<p>In active mode nothing changes: the timer measures as before, and the two new functions measure nothing. <code>VBAT_CONVERSION_MSEC</code>, the time allowed to the conversion, is 10&nbsp;ms. Twenty reads of the level, FlySight in sleep mode, were answered in 65 to 116&nbsp;ms without the fix and in 66 to 132&nbsp;ms with it.</p>
+
+<h3 class="step">Tests</h3>
+<p>From the Windows PC, the sequence of the table above on each build. <code>develop</code> is the published commit and "+ fix" the same with this fix and nothing else; the branch is the branch before this commit. On <code>master</code>, unmodified and with the patch, the PC finds five services and no Battery Service: there is nothing to read.</p>
+<table>
+  <tr><th>Level read by the PC</th><th><code>develop</code></th><th><code>develop</code> + fix</th><th>Branch</th><th>Branch + fix</th></tr>
+  <tr><td>FlySight just started, in sleep mode</td><td class="ko">0&nbsp;%</td><td class="ok">88&nbsp;%</td><td class="ko">0&nbsp;%</td><td class="ok">88&nbsp;%</td></tr>
+  <tr><td>In active mode</td><td class="ok">83 to 87&nbsp;%</td><td class="ok">84 to 86&nbsp;%</td><td class="ok">85 to 89&nbsp;%</td><td class="ok">83 to 86&nbsp;%</td></tr>
+  <tr><td>Back in sleep mode</td><td class="ko">84&nbsp;%, the last of active mode</td><td class="ok">88&nbsp;%</td><td class="ko">86&nbsp;%, the last of active mode</td><td class="ok">88&nbsp;%</td></tr>
+</table>
+<p>On <code>develop</code> the PC cannot connect a second time (<a href="#b1">bug 1</a>), so its two columns were read over the link of a first pairing, from a FlySight whose bonds had been cleared.</p>
+<p>The level Windows itself holds for the FlySight, with the FlySight in sleep mode and no program reading its battery:</p>
+<ul>
+  <li>After a pairing, FlySight just started: 0&nbsp;% with the branch, 88&nbsp;% with the branch + fix.</li>
+  <li>The PC that held 0&nbsp;%: still 0&nbsp;% after a connection to the branch, 88&nbsp;% after a connection to the branch + fix.</li>
+  <li>On <code>develop</code> + patch + fix, the patch being what lets the PC connect a second time: a PC that held 84&nbsp;%, the last level of an active mode, held 88&nbsp;% after its next connection.</li>
+</ul>
+<p>The scripts are <code>windows/battery_level.py</code> for the level a program reads, and the battery property of the device node (<code>Get-PnpDeviceProperty</code>) for the one Windows holds; <code>windows/README.md</code> gives the commands.</p>
+<div class="callout warn">
+<p><strong>Limits of the tests of this fix.</strong></p>
+<ul>
+  <li>One board, with its battery between 4.06 and 4.10&nbsp;V and the cable unplugged: no low battery, and no reading while charging.</li>
+  <li>With <code>Enable_Vbat: 0</code> in the configuration, active mode does not measure the battery, and the fix does not either while active mode lasts: a host then gets the level of the last measurement made outside it. That configuration was not tried.</li>
+  <li>A host that neither reads the level nor subscribes again gets it once, when it connects, and not again during that link.</li>
+  <li>What Windows holds was read on one PC (Windows 11 Pro 25H2). What macOS, Linux, iOS and Android do with that level was not looked at.</li>
+</ul>
+</div>
+
+<!-- ================================================================== -->
+<h2 id="bonds"><span class="num">13.</span>Windows, bug 8: one host too many, and the FlySight forgets all the others</h2>
+
+<p>Found at the first pairing of the Windows PC: the FlySight held the bonds of four hosts before it, and one after it, the PC's. It is not particular to Windows. The bonds are kept by the BLE stack in a memory of 2028 bytes, and the firmware asks the stack for records that leave room there for three hosts on <code>develop</code> and five on <code>master</code>. One commit on the branch, <em>Make room for the bonds of fourteen hosts instead of three</em> (<code>baf4d48</code>). It is not in the patch of <a href="#patch">section 6</a>.</p>
+
+<h3 class="step">Glossary</h3>
+<dl>
+  <dt>Bond, bonded host</dt>
+  <dd>What the FlySight keeps of a host that has paired: its address and the keys of their links. A bonded host connects again without pairing, and outside pairing mode the FlySight accepts no other.</dd>
+  <dt>BLE stack</dt>
+  <dd>The ST firmware of the second processor of the microcontroller, version 1.19.0 on this board. It keeps the bonds itself; the firmware of the FlySight only asks it for their list.</dd>
+  <dt>NVM</dt>
+  <dd>The non-volatile memory where the stack keeps the bonds: 2028 bytes (<code>BLE_NVM_SRAM_SIZE</code>, 507 words), a size the application cannot change. It holds two records per bonded host.</dd>
+  <dt>Security record</dt>
+  <dd>The first of the two: 80 bytes, the address of the host and the keys.</dd>
+  <dt>GATT record</dt>
+  <dd>The second: what the stack needs to give that host its subscriptions back when it reconnects, and to tell it when the services of the FlySight have changed. What it holds, and so its size, depends on an option.</dd>
+  <dt>CCCD</dt>
+  <dd>Client Characteristic Configuration descriptor: what a host writes to subscribe to the notifications or indications of a characteristic. <code>develop</code> has nine of them.</dd>
+  <dt><code>CFG_BLE_OPTIONS</code></dt>
+  <dd>The options the firmware gives the stack when it starts, in <code>app_conf.h</code>. One of them chooses the GATT record: <code>SHCI_C2_BLE_INIT_OPTIONS_FULL_GATTDB_NVM</code>, every attribute of the GATT database with its handle and its UUID, or <code>SHCI_C2_BLE_INIT_OPTIONS_REDUC_GATTDB_NVM</code>, a 16-byte hash of the database. Both hold the value of each CCCD.</dd>
+  <dt>Service Changed</dt>
+  <dd>The indication by which a device tells a bonded host that its services are no longer the ones that host knows, after a firmware update for instance.</dd>
+  <dt>Mirror build</dt>
+  <dd>A test build that makes the stack keep its memory in RAM instead of its own flash, with the option ST provides for that (<code>SHCI_C2_CONFIG_CONFIG1_BIT0_BLE_NVM_DATA_TO_SRAM</code>). The ST-Link can then read that memory while the firmware runs.</dd>
+</dl>
+
+<h3 class="step">Problem</h3>
+<p>The firmware asks for the full GATT record:</p>
+<div class="file">Core/Inc/app_conf.h</div>
+<pre><code>#define CFG_BLE_OPTIONS  (SHCI_C2_BLE_INIT_OPTIONS_LL_HOST | ... | SHCI_C2_BLE_INIT_OPTIONS_FULL_GATTDB_NVM | ...)</code></pre>
+<p>Read in the memory of the stack on mirror builds, this is what one bonded host takes. Each record has a header of 4 bytes.</p>
+<table>
+  <tr><th></th><th><code>master</code></th><th><code>develop</code> and the branch</th></tr>
+  <tr><td>Security record</td><td>80 + 4 bytes</td><td>80 + 4 bytes</td></tr>
+  <tr><td>Full GATT record</td><td>284 + 4 bytes: 30 attributes, 8 of them with a 128-bit UUID</td><td>420 + 4 bytes: 44 attributes, 12 of them with a 128-bit UUID</td></tr>
+  <tr><td>One host</td><td>372 bytes</td><td>508 bytes</td></tr>
+  <tr><td>Hosts that fit in 2028 bytes</td><td>5</td><td>3: a fourth would need 2032 bytes</td></tr>
+</table>
+<p>What <code>develop</code> added to the database, two services and a control point, is fourteen attributes: it cost the place of two hosts.</p>
+<p><strong>What the stack does with one host too many</strong>, measured on the mirror build of the branch with hosts that pair one after the other:</p>
+<table>
+  <tr><th>Host</th><th>Memory of the stack</th><th>Bonded hosts</th></tr>
+  <tr><td>1, 2, 3</td><td>508, 1016, then 1524 bytes used</td><td>1, 2, then 3</td></tr>
+  <tr><td>4, while it is connected</td><td>1608 bytes used: its security record is written</td><td>4</td></tr>
+  <tr><td>4, once its link has ended</td><td class="ko">508 bytes used: its two records</td><td class="ko">1</td></tr>
+</table>
+<p>The GATT record of a host is written when its link ends. For the fourth host 424 bytes are needed and 420 are free: the stack erases every record and writes those of the last host again. The pairing of that host succeeds and it works normally; the firmware is told nothing; the three other hosts are gone. This is how the stack is meant to behave: the <a href="https://github.com/STMicroelectronics/STM32CubeWB/blob/master/Projects/STM32WB_Copro_Wireless_Binaries/STM32WB5x/Release_Notes.html">release notes of ST's stack</a> say so for V1.1.0 ("Erase and keep latest record when it is full"), and an <a href="https://community.st.com/t5/stm32-mcus-wireless/number-of-bonding-bonded-devices-and-validation-and-typo/td-p/670982">answer of ST on its forum</a> says that only the last bond is kept.</p>
+<p><strong>As it was found</strong>, with the memory in the flash of the stack and the hosts of the two parts above. The PC pairs, and the trace of the firmware records:</p>
+<pre><code>ADV START    PAIRING mode bonded=4
+CONNECTED    status=0 peer=64:5D:86:**:**:** (public)
+ENCRYPTION   status=0x00 enabled=1
+GAP/L2CAP    0x0006 FW_ERROR type=0x03 (NVM level warning) data=00
+GAP/L2CAP    0x0401 PAIRING_COMPLETE status=0 reason=0x00
+DISCONNECTED reason=0x13 (remote user terminated)
+ADV START    idle         bonded=1</code></pre>
+<p>The records of <code>develop</code> alone cannot hold four hosts. The board had run <code>master</code> as well, whose records are smaller: with one host bonded by <code>master</code> and three by the branch, the mirror build holds four hosts in 1896 bytes, and the pairing of a fifth gives the same seven lines.</p>
+<p><strong>The warning of the stack.</strong> The fourth line is an event of the stack, <code>ACI_HAL_FW_ERROR_EVENT</code> of type "NVM level warning". The firmware has no case for it. It does not always come: in the series on the branch it came each time a record had left 132 bytes free or less (132, 72, 48 and 12 bytes), and never when 156 or more were left. On <code>develop</code> the security record of the fourth host leaves 420 bytes: the three hosts are erased without a warning.</p>
+<p><strong>What an erased host sees.</strong> Nothing tells it, and it still holds its keys. The Windows PC was put in that position, the FlySight holding the bonds of two other hosts and no longer its own. With the FlySight idle the PC does not connect, and the firmware records nothing: outside pairing mode it accepts bonded hosts only. In pairing mode the link comes up and the PC ends it within half a second, with WinRT alone and with the library, which reports that the FlySight does not accept the connection. The PC does not pair again by itself. Removing the FlySight on the PC, then pairing it again in pairing mode, works.</p>
+
+<h3 class="step">Proposed fix</h3>
+<p>Ask the stack for its reduced GATT record:</p>
+<div class="file">Core/Inc/app_conf.h</div>
+<pre><code><span class="del">-#define CFG_BLE_OPTIONS  (SHCI_C2_BLE_INIT_OPTIONS_LL_HOST | ... | SHCI_C2_BLE_INIT_OPTIONS_FULL_GATTDB_NVM | ...)</span>
+<span class="add">+#define CFG_BLE_OPTIONS  (SHCI_C2_BLE_INIT_OPTIONS_LL_HOST | ... | SHCI_C2_BLE_INIT_OPTIONS_REDUC_GATTDB_NVM | ...)</span></code></pre>
+<p>The reduced record holds the hash of the database and 3 bytes per CCCD. On the branch that is 55 bytes instead of 420: one host takes 144 bytes instead of 508, and fourteen fit. On <code>master</code>, whose database has five CCCDs, one host takes 132 bytes and fifteen fit.</p>
+<p><strong>Measured with the fix</strong>, on a real bond kept in the flash of the stack:</p>
+<ul>
+  <li><strong>A FlySight that is bonded when it gets the fix stays bonded.</strong> The PC paired with the branch, the branch with the fix was flashed: the firmware listed one bonded host, and the PC connected twice without pairing again, encrypted read and ping answered. Back to the branch without the fix: the same.</li>
+  <li><strong>A host still learns that the services have changed.</strong> The PC paired with <code>master</code> + patch, which has five services, and the branch, which has seven, was flashed. Windows keeps the services of a bonded device in a cache; a script listed that cache, held a link for 8&nbsp;s without asking for anything, and listed it again: five services before the link and seven after it, with the full record and with the reduced one alike.</li>
+  <li><strong>A bonded host still gets its subscriptions back.</strong> The PC had subscribed to the Battery Level when it paired with the branch + fix, and Windows held 0&nbsp;% for the FlySight, that build being without the fix of <a href="#battery">bug 7</a>. With the two fixes flashed, Windows held 88&nbsp;% after the next connection of the PC: the stack had given the subscription back from the reduced record, and notified the level.</li>
+</ul>
+<p><code>app_conf.h</code> is generated by STM32CubeMX from <code>flysight-2-firmware.ioc</code>, and this line is outside its user sections. The commit changes the header only: the option has to be set in the CubeMX project too, or the next generation writes the full record back. The commit also adds a line to <code>Docs/ble.md</code>, which gives the number of hosts and what happens beyond it.</p>
+<p><strong>What the fix does not change:</strong> the place is still finite. The fifteenth host erases the fourteen others, as the fourth does today. With the reduced record the stack does send its warning first, during the pairing of the fourteenth host, in the two series that recorded it.</p>
+
+<h3 class="step">Tests</h3>
+<p id="table-e"><strong>Table E. Hosts pairing one after the other, on mirror builds.</strong> <code>master</code> and <code>develop</code> are the published commits, "+ patch" the same with the patch of <a href="#patch">section 6</a>, "+ fix" the same with this option and nothing else. After each pairing the memory of the stack was read over SWD.</p>
+<table>
+  <tr><th>Firmware</th><th>One host takes</th><th>Hosts that fit</th><th>Pairing of one more</th></tr>
+  <tr><td><code>master</code> <code>9ec7186</code>, unmodified</td><td>372 bytes</td><td class="ko">5</td><td class="ko">the 6th leaves 1 bond, its own</td></tr>
+  <tr><td><code>master</code> + patch</td><td>372 bytes</td><td class="ko">5</td><td class="ko">the 6th leaves 1 bond</td></tr>
+  <tr><td><code>develop</code> <code>e67ee9f</code>, unmodified</td><td>508 bytes</td><td class="ko">3</td><td class="ko">the 4th leaves 1 bond</td></tr>
+  <tr><td><code>develop</code> + patch</td><td>508 bytes</td><td class="ko">3</td><td class="ko">the 4th leaves 1 bond</td></tr>
+  <tr><td>Branch</td><td>508 bytes</td><td class="ko">3</td><td class="ko">the 4th leaves 1 bond</td></tr>
+  <tr><td><code>master</code> + fix</td><td>132 bytes</td><td class="ok">15</td><td>the 16th leaves 1 bond</td></tr>
+  <tr><td><code>develop</code> + fix</td><td>144 bytes</td><td class="ok">14</td><td>the 15th leaves 1 bond</td></tr>
+  <tr><td>Branch + fix</td><td>144 bytes</td><td class="ok">14</td><td>the 15th leaves 1 bond</td></tr>
+</table>
+<p><strong>With fourteen hosts held</strong>, on the mirror build of the branch with the fix: the PC paired as the fourteenth host, which left 12 bytes free, then connected again with the FlySight idle and in pairing mode, encrypted read and ping answered each time. The firmware listed fourteen bonded hosts throughout.</p>
+<p><strong>The pass of <a href="#table-d">table D</a></strong>, from a FlySight without any bond, the bond kept in the flash of the stack. On the branch with this fix alone: the PC pairs, then the library and the Kotlin layers connect with the FlySight idle and in pairing mode, encrypted read OK and both files read; a pairing window left to expire shows <code>01</code> for 29 s, then <code>00</code>, and the FlySight still advertises at 233 s. On the branch with the two fixes of this part, the same, with SkyGames: it adds the FlySight and pairs with it, then connects to it idle and in pairing mode and reads its configuration each time; window <code>01</code> for 29 s, then <code>00</code>, still advertising at 247 s.</p>
+<p>The patch of the mirror build is <code>windows/nvm-mirror.patch</code>, the script that reads and decodes the memory <code>windows/nvm_dump.py</code>, and the one that lists the cache of Windows <code>windows/gatt_cache.py</code>.</p>
+<div class="callout warn">
+<p><strong>Limits of the tests of this fix.</strong></p>
+<ul>
+  <li><strong>One PC stood for every host.</strong> After each pairing the address of the PC was replaced by a made-up one in the two records the stack had just written, and the PC forgot the FlySight: to the stack the PC was then a host it did not know, and the records it had written stayed as another host's. No second host paired.</li>
+  <li><strong>The series were made on mirror builds</strong>, where the stack keeps its 2028 bytes in RAM. A reset of this board erases that RAM, so the debugger put the memory back before the stack started, after each reset. With the memory in flash the erasure was seen once, when it was found; the mirror build gives the same lines for the same sequence.</li>
+  <li>What an erased host sees was measured from Windows only, in one sequence.</li>
+  <li>One version of the stack, 1.19.0.</li>
+  <li>The CubeMX project was not changed, and nothing was generated from it.</li>
+</ul>
+</div>
+
 </main>
 </body>
 </html>

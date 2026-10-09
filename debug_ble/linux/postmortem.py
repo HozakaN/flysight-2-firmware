@@ -2,14 +2,34 @@
 """Reads over SWD, from a firmware stopped in Error_Handler, what tells why the mount failed.
 
 usage: postmortem.py <elf> [output file]
+
+Needs OpenOCD (`openocd` on the PATH, or the OPENOCD variable) and arm-none-eabi-nm and
+-addr2line. On Windows those two are taken from WSL when they are not installed natively.
 """
+import os
 import re
+import shutil
 import struct
 import subprocess
 import sys
 
 ELF = sys.argv[1]
 OUT = open(sys.argv[2], 'w') if len(sys.argv) > 2 else None
+OPENOCD = os.environ.get('OPENOCD', 'openocd')
+# OpenOCD 0.12 and later no longer know the hla_swd transport
+TRANSPORT = ('if {[catch {transport select hla_swd}]} '
+             '{ if {[catch {transport select swd}]} { transport select dapdirect_swd } }')
+
+
+def binutil(name, *arguments):
+    """Runs arm-none-eabi-<name> on the ELF, natively or through WSL."""
+    tool = 'arm-none-eabi-' + name
+    if shutil.which(tool) or not shutil.which('wsl'):
+        command = [tool, *arguments, ELF]
+    else:
+        path = os.path.abspath(ELF).replace(chr(92), '/')
+        command = ['wsl', '-e', tool, *arguments, '/mnt/' + path[0].lower() + path[2:]]
+    return subprocess.run(command, capture_output=True, text=True).stdout
 
 
 def say(text):
@@ -19,7 +39,7 @@ def say(text):
 
 
 def symbols():
-    out = subprocess.run(['arm-none-eabi-nm', '-S', ELF], capture_output=True, text=True).stdout
+    out = binutil('nm', '-S')
     table = {}
     for line in out.splitlines():
         parts = line.split()
@@ -52,7 +72,7 @@ want('GPIOD IDR ODR', 0x48000C10, 2)
 want('GPIOB MODER', 0x48000400, 1)
 want('GPIOB IDR', 0x48000410, 1)
 
-cmd = ['openocd', '-f', 'interface/stlink.cfg', '-c', 'transport select hla_swd', '-f', 'target/stm32wbx.cfg',
+cmd = [OPENOCD, '-f', 'interface/stlink.cfg', '-c', TRANSPORT, '-f', 'target/stm32wbx.cfg',
        '-c', 'stm32wbx.cpu configure -event examine-end {}', '-c', 'init', '-c', 'halt',
        '-c', 'echo [format PC=%s [reg pc]]', '-c', 'echo [format SP=%s [reg sp]]', '-c', 'echo [format LR=%s [reg lr]]']
 for i, (label, addr, words, shift, size) in enumerate(READS):
@@ -83,8 +103,7 @@ def words_of(key):
 
 
 def where(addr):
-    r = subprocess.run(['arm-none-eabi-addr2line', '-f', '-e', ELF, '0x%x' % addr], capture_output=True, text=True)
-    lines = r.stdout.splitlines()
+    lines = binutil('addr2line', '-f', '0x%x' % addr, '-e').splitlines()
     return '%s (%s)' % (lines[0], lines[1].split('/')[-1]) if len(lines) >= 2 else '?'
 
 

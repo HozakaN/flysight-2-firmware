@@ -25,8 +25,8 @@ python vbus.py reset-probe                # recover a stuck ST-Link
 ```
 
 `unplug` and `plug` wait for the firmware (USB clock and D+ pull-up, read over SWD)
-and for the host (`ioreg` on macOS, sysfs on Linux) to react, and print how long it
-took. `cycle` also fails if the firmware faulted (CFSR/HFSR) and always gives the pin
+and for the host (`ioreg` on macOS, sysfs on Linux, `pnputil` on Windows) to react, and
+print how long it took. `cycle` also fails if the firmware faulted (CFSR/HFSR) and always gives the pin
 back on exit, including on Ctrl-C. Exit codes: 0 ok, 1 a check failed, 2 error.
 
 `button` drives the user button (PC12, pressed when low) the same way. Only the sleep
@@ -73,6 +73,27 @@ BLE stack:
 ```bash
 openocd -f interface/stlink.cfg -c "transport select hla_swd" -f target/stm32wbx.cfg -c "program build.elf verify reset exit"
 ```
+
+### Windows
+
+```bat
+winget install -e --id Python.Python.3.12
+winget install -e --id xpack-dev-tools.openocd-xpack
+```
+
+Open a new terminal afterwards, so that `python` and `openocd` are on the `PATH`. An
+STLINK-V3 needs no driver: Windows 11 binds WinUSB to its debug interface by itself.
+
+That OpenOCD (0.12.0-7) is more recent than the one of Ubuntu 24.04 and no longer knows
+the `hla_swd` transport; `vbus.py` and `ble_trace.py` ask for SWD under the name each
+version has. To flash a build:
+
+```bat
+openocd -f interface/stlink.cfg -c "transport select swd" -f target/stm32wbx.cfg -c "program build.elf verify reset exit"
+```
+
+`ble_trace.py instrument` works on a checkout made with `core.autocrlf`: the trace takes
+the line ends of the files.
 
 ## BLE trace (`ble_trace.py`)
 

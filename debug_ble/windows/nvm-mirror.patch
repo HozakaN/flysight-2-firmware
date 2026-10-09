@@ -1,0 +1,32 @@
+Test aid, not a fix: a build whose BLE stack keeps its non-volatile memory (the bonds and the
+GATT record of each bonded device) in a buffer of RAM instead of the flash of CPU2, with the
+option ST provides for that (SHCI_C2_CONFIG_CONFIG1_BIT0_BLE_NVM_DATA_TO_SRAM). A debugger can
+then read that memory, 2028 bytes at the symbol ble_nvm_mirror, which nvm_dump.py does.
+
+ST asks for that buffer to be in SRAM2 (shci.h), which a reset erases on this board (option bit
+SRAM2RST is 0): with this build a reset forgets every bond. nvm_dump.py --restore puts a saved
+content back before the stack starts.
+
+It applies to master, to develop and to the branch:
+  ./build_variant.sh HEAD branch-nvm trace file:nvm-mirror.patch
+
+--- a/Core/Src/app_entry.c
++++ b/Core/Src/app_entry.c
+@@ -67,6 +67,8 @@
+ PLACE_IN_SECTION("MB_MEM2") ALIGN(4) static TL_CmdPacket_t SystemCmdBuffer;
+ PLACE_IN_SECTION("MB_MEM2") ALIGN(4) static uint8_t SystemSpareEvtBuffer[sizeof(TL_PacketHeader_t) + TL_EVT_HDR_SIZE + 255U];
+ PLACE_IN_SECTION("MB_MEM2") ALIGN(4) static uint8_t BleSpareEvtBuffer[sizeof(TL_PacketHeader_t) + TL_EVT_HDR_SIZE + 255];
++/* Test aid: the BLE stack keeps its bonds and GATT records here instead of the flash of CPU2 */
++PLACE_IN_SECTION("MB_MEM2") ALIGN(4) uint32_t ble_nvm_mirror[BLE_NVM_SRAM_SIZE];
+ 
+ /* USER CODE BEGIN PV */
+ #if (CFG_LPM_SUPPORTED == 1)
+@@ -496,6 +498,8 @@
+     DeviceID = LL_DBGMCU_GetDeviceID();
+     APP_DBG_MSG(">>== DBGMCU_GetDeviceID= %lx \n\r", DeviceID);
+     config_param.DeviceID = (uint16_t)DeviceID;
++    config_param.Config1 = SHCI_C2_CONFIG_CONFIG1_BIT0_BLE_NVM_DATA_TO_SRAM;
++    config_param.BleNvmRamAddress = (uint32_t)ble_nvm_mirror;
+     (void)SHCI_C2_Config(&config_param);
+ 
+     APP_BLE_Init();

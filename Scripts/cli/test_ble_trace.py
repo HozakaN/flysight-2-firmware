@@ -6,6 +6,7 @@ Usage:
 """
 
 import os
+import re
 import shutil
 import struct
 import tempfile
@@ -42,6 +43,22 @@ class PatchTests(unittest.TestCase):
         patch_sources(self.root, reverse=True)
         self.assertEqual({path: self.content(path) for path in (APP_BLE, APP_CONF)}, before)
 
+    def test_the_trace_takes_the_line_ends_of_the_sources(self):
+        # A checkout has LF line ends, or CRLF on Windows with core.autocrlf
+        for line_end in (b"\n", b"\r\n"):
+            before = {}
+            for path in (APP_BLE, APP_CONF):
+                before[path] = self.content(path).replace(b"\r\n", b"\n").replace(b"\n", line_end)
+                with open(os.path.join(self.root, path), "wb") as f:
+                    f.write(before[path])
+            patch_sources(self.root)
+            for path in (APP_BLE, APP_CONF):
+                traced = self.content(path)
+                self.assertIn(MARKER.encode(), traced)
+                self.assertEqual(traced.count(b"\n"), traced.count(line_end))
+            patch_sources(self.root, reverse=True)
+            self.assertEqual({path: self.content(path) for path in (APP_BLE, APP_CONF)}, before)
+
     def test_trace_blocks_are_closed_and_both_switches_exist(self):
         patch_sources(self.root)
         text = self.content(APP_BLE).decode()
@@ -66,8 +83,11 @@ class PatchTests(unittest.TestCase):
         path = os.path.join(self.root, APP_BLE)
         with open(path, newline="") as f:
             text = f.read()
+        text, removed = re.subn(r"  request_pairing = 0;\r?\n\r?\n  FS_Adv_Request\(APP_BLE_LP_ADV\);",
+                                "  /* gone */", text)
+        self.assertEqual(removed, 1)
         with open(path, "w", newline="") as f:
-            f.write(text.replace("  request_pairing = 0;\n\n  FS_Adv_Request(APP_BLE_LP_ADV);", "  /* gone */"))
+            f.write(text)
         broken = {p: self.content(p) for p in (APP_BLE, APP_CONF)}
         with self.assertRaises(TraceError) as ctx:
             patch_sources(self.root)
