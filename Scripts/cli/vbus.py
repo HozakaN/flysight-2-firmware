@@ -19,7 +19,7 @@ lives in the MCU's GPIO registers, so it survives this script exiting and is
 cleared by any reset.
 
 Requires STM32_Programmer_CLI (STM32CubeProgrammer, also bundled with
-STM32CubeIDE). SWD access is HOTPLUG: the core is never halted.
+STM32CubeIDE) or OpenOCD. SWD access is HOTPLUG: the core is never halted.
 
 Usage:
     python vbus.py status
@@ -81,6 +81,7 @@ DEFAULT_PID = 0x0569
 
 ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 DATA_RE = re.compile(r"^(0x[0-9A-Fa-f]+)\s*:\s*([0-9A-Fa-f]{2,8})\s*$", re.M)
+OPENOCD_DATA_RE = re.compile(r"^0x[0-9A-Fa-f]+:\s*((?:[0-9A-Fa-f]{2,8}\s*)+)$", re.M)
 
 
 SWD_HUNG_HINT = (
@@ -117,6 +118,14 @@ def find_programmer(explicit=None):
             return path
     raise SwdError("STM32_Programmer_CLI not found. Install STM32CubeProgrammer or "
                    "STM32CubeIDE, or pass --programmer / set STM32_PROGRAMMER_CLI.")
+
+
+def find_openocd(explicit=None):
+    """Locate OpenOCD, or None."""
+    for path in (explicit, os.environ.get("OPENOCD"), shutil.which("openocd")):
+        if path and os.path.isfile(path) and os.access(path, os.X_OK):
+            return path
+    return None
 
 
 class Swd:
@@ -171,6 +180,83 @@ class Swd:
         out = self._run("-rst")
         if "Software reset is performed" not in out:
             raise SwdError(self._error_from(out, "SWD reset failed"))
+
+
+class OpenOcd:
+    """The same memory access through OpenOCD, where STM32CubeProgrammer is not installed."""
+
+    def __init__(self, programmer, sn=None, timeout=10, runner=subprocess.run):
+        self.programmer = programmer
+        self.sn = sn
+        self.timeout = timeout
+        self._runner = runner
+
+    def _run(self, *cmds):
+        args = [self.programmer, "-f", "interface/stlink.cfg", "-c", "transport select hla_swd"]
+        if self.sn:
+            args += ["-c", f"adapter serial {self.sn}"]
+        # The stock target script switches debug in low-power modes on at every
+        # connection (DBGMCU_CR). Leave the MCU as the firmware configured it.
+        args += ["-f", "target/stm32wbx.cfg",
+                 "-c", "stm32wbx.cpu configure -event examine-end {}", "-c", "init"]
+        for cmd in cmds:
+            args += ["-c", cmd]
+        args += ["-c", "exit"]
+        try:
+            proc = self._runner(args, capture_output=True, text=True, timeout=self.timeout)
+        except subprocess.TimeoutExpired:
+            raise SwdError(SWD_HUNG_HINT) from None
+        out = proc.stdout + proc.stderr
+        for line in out.splitlines():
+            if line.startswith("Error"):
+                hint = f" ({SWD_HUNG_HINT})" if "unable to connect to the target" in line else ""
+                raise SwdError(line.strip() + hint)
+        return out
+
+    @staticmethod
+    def _values(out):
+        return [int(x, 16) for m in OPENOCD_DATA_RE.finditer(out) for x in m.group(1).split()]
+
+    def read(self, *specs):
+        """Read (address, width) pairs, width 8 or 32, in a single SWD session."""
+        out = self._run(*(f"{'mdb' if width == 8 else 'mdw'} 0x{addr:08X}" for addr, width in specs))
+        values = self._values(out)
+        if len(values) != len(specs):
+            raise SwdError("SWD read failed (is the ST-Link connected?)")
+        return values
+
+    def read_bytes(self, addr, count):
+        values = self._values(self._run(f"mdb 0x{addr:08X} {count}"))
+        if len(values) < count:
+            raise SwdError("SWD read failed (is the ST-Link connected?)")
+        return bytes(values[:count])
+
+    def write8(self, addr, value):
+        self._run(f"mwb 0x{addr:08X} 0x{value:02X}")
+
+    def write32(self, addr, value, check=True):
+        # OpenOCD does not read back, so there is no bogus verify error to ignore
+        self._run(f"mww 0x{addr:08X} 0x{value:08X}")
+
+    def reset(self):
+        self._run("reset run")
+
+
+def connect(args, programmer_class=None):
+    """The SWD backend: STM32_Programmer_CLI when it is installed, OpenOCD otherwise."""
+    openocd = getattr(args, "openocd", None)
+    if not openocd:
+        try:
+            return (programmer_class or Swd)(find_programmer(args.programmer),
+                                             sn=args.sn, timeout=args.swd_timeout)
+        except SwdError:
+            if args.programmer:
+                raise
+    openocd = find_openocd(openocd)
+    if not openocd:
+        raise SwdError("neither STM32_Programmer_CLI nor OpenOCD was found. Install "
+                       "STM32CubeProgrammer, STM32CubeIDE or OpenOCD, or pass --programmer / --openocd.")
+    return OpenOcd(openocd, sn=args.sn, timeout=args.swd_timeout)
 
 
 @dataclass
@@ -268,6 +354,17 @@ def press_button(swd):
 
 def release_button(swd):
     release_pin(swd, GPIOC, BUTTON_PIN, "PC12")
+
+
+def button_edges(swd):
+    """Where to write, and what, to push the button down and to let it up with one SWD access each."""
+    moder_addr = GPIOC + BUTTON_PIN // 4
+    shift = 2 * (BUTTON_PIN % 4)
+    moder, odr = swd.read((moder_addr, 8), (GPIOC + 0x14, 32))
+    if odr & (1 << BUTTON_PIN):
+        swd.write32(GPIOC + 0x18, (1 << BUTTON_PIN) << 16, check=False)
+    up = moder & ~(0b11 << shift) & 0xFF
+    return moder_addr, up | (0b01 << shift), up
 
 
 def reset_probe(programmer):
@@ -499,11 +596,15 @@ def cmd_button(swd, args):
         release_button(swd)
         print("button released")
         return 0
+    # Two presses only make a double press when the second one starts less than
+    # HOLD_MSEC (1 s, FlySight/mode.c) after the first, and an SWD access can take
+    # a good part of that: one access per edge, and the checks afterwards.
     try:
+        moder_addr, down, up = button_edges(swd)
         for i in range(args.count):
-            press_button(swd)
+            swd.write8(moder_addr, down)
             time.sleep(args.hold)
-            release_button(swd)
+            swd.write8(moder_addr, up)
             if i + 1 < args.count:
                 time.sleep(args.gap)
     finally:
@@ -532,6 +633,8 @@ def build_parser():
     parser = argparse.ArgumentParser(
         description="Simulate plugging/unplugging the FlySight's USB cable over SWD")
     parser.add_argument("--programmer", help="path to STM32_Programmer_CLI")
+    parser.add_argument("--openocd", help="path to OpenOCD, to use it instead of STM32_Programmer_CLI "
+                                          "(it is used anyway when the latter is not installed)")
     parser.add_argument("--sn", help="ST-Link serial number (when several probes are connected)")
     parser.add_argument("--swd-timeout", type=float, default=10,
                         help="seconds before an SWD access is considered hung (default 10)")
@@ -595,8 +698,7 @@ def main(argv=None):
     args = build_parser().parse_args(argv)
     signal.signal(signal.SIGTERM, _terminate)
     try:
-        swd = Swd(find_programmer(args.programmer), sn=args.sn, timeout=args.swd_timeout)
-        return args.func(swd, args)
+        return args.func(connect(args), args)
     except SwdError as e:
         print(f"error: {e}", file=sys.stderr)
         return 2

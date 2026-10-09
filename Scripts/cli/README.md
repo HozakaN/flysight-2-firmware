@@ -36,8 +36,11 @@ for 30 s the FlySight advertises with the pairing flag set and accepts any centr
 ## Requirements
 
 - Python 3.7+, no packages to install.
-- STM32CubeProgrammer or STM32CubeIDE (`STM32_Programmer_CLI` is found automatically,
-  or pass `--programmer` / set `STM32_PROGRAMMER_CLI`) and an ST-Link on the SWD pins.
+- An ST-Link on the SWD pins, and one of:
+  - STM32CubeProgrammer or STM32CubeIDE (`STM32_Programmer_CLI` is found automatically,
+    or pass `--programmer` / set `STM32_PROGRAMMER_CLI`);
+  - OpenOCD (`openocd` on the `PATH`, or pass `--openocd` / set `OPENOCD`). It is used
+    when `STM32_Programmer_CLI` is not installed, or on request with `--openocd`.
 - **A firmware built with `CFG_DEBUGGER_SUPPORTED=1`** (CubeMX: STM32_WPAN → Debugger,
   or `Core/Inc/app_conf.h`). Otherwise `APPD_Init` switches PA13/PA14 to analog and
   disables debug in low-power modes, and the probe cannot reach the MCU while it runs
@@ -52,6 +55,24 @@ for 30 s the FlySight advertises with the pairing flag set and accepts any centr
   not plugged into the machine running the script, `--sn` with several ST-Links.
 - The ST-Link can get stuck when an SWD access is interrupted (libusb timeouts,
   `ST-LINK SN : -`). `reset-probe` resets it at USB level; unplugging it also works.
+- `button` uses one SWD access per edge: the firmware only takes two presses for a double
+  press when the second starts less than a second after the first (`HOLD_MSEC` in
+  `FlySight/mode.c`), and one access already takes more than a tenth of a second.
+
+### Linux
+
+```bash
+sudo apt-get install openocd
+sudo sh -c 'printf "%s\n" "SUBSYSTEM==\"usb\", ATTR{idVendor}==\"0483\", ATTR{idProduct}==\"37*\", MODE=\"0660\", GROUP=\"plugdev\", TAG+=\"uaccess\"" > /etc/udev/rules.d/49-stlink.rules && udevadm control --reload-rules && udevadm trigger --subsystem-match=usb --attr-match=idVendor=0483'
+```
+
+The second command lets a user who is not root open the ST-Link; without it OpenOCD
+fails with `Error: open failed`. To flash a build, without touching the bootloader or the
+BLE stack:
+
+```bash
+openocd -f interface/stlink.cfg -c "transport select hla_swd" -f target/stm32wbx.cfg -c "program build.elf verify reset exit"
+```
 
 ## BLE trace (`ble_trace.py`)
 

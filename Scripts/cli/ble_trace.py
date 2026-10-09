@@ -37,7 +37,7 @@ import struct
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from vbus import Swd, SwdError, find_programmer  # noqa: E402
+from vbus import Swd, SwdError, connect  # noqa: E402
 
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 APP_BLE = "STM32_WPAN/App/app_ble.c"
@@ -321,7 +321,7 @@ def open_target(args):
     elf = args.elf or os.environ.get("FLYSIGHT_ELF")
     if not elf:
         raise TraceError("pass --elf (or set FLYSIGHT_ELF) with the ELF of the firmware that is running")
-    return Target(find_programmer(args.programmer), sn=args.sn, timeout=args.swd_timeout), elf_symbols(elf)
+    return connect(args, Target), elf_symbols(elf)
 
 
 def cmd_instrument(args):
@@ -368,6 +368,7 @@ def cmd_set(args):
 def build_parser():
     parser = argparse.ArgumentParser(description="Temporary BLE trace for the FlySight 2, read over SWD.")
     parser.add_argument("--programmer", help="path to STM32_Programmer_CLI")
+    parser.add_argument("--openocd", help="path to OpenOCD, to use it instead of STM32_Programmer_CLI")
     parser.add_argument("--sn", help="ST-Link serial number, if several are connected")
     parser.add_argument("--swd-timeout", type=float, default=10, help="seconds before giving up on SWD")
     sub = parser.add_subparsers(dest="command", required=True)

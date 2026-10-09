@@ -5,12 +5,14 @@ Usage:
     python -m unittest test_vbus
 """
 
+import contextlib
+import io
 import types
 import unittest
 
 import vbus
 from vbus import (GPIOA_BSRR, GPIOA_IDR, GPIOA_MODER, GPIOA_ODR, MODER_MASK,
-                  MODER_OUTPUT, VBUS_BIT, State, Swd, SwdError)
+                  MODER_OUTPUT, VBUS_BIT, OpenOcd, State, Swd, SwdError)
 
 
 class FakeGpioA:
@@ -160,24 +162,27 @@ class ButtonTests(unittest.TestCase):
         vbus.press_button(gpio)
         self.assertIn(("w32", vbus.GPIOC + 0x18, (1 << vbus.BUTTON_PIN) << 16), gpio.writes)
 
-    def test_click_releases_the_button_even_when_a_step_fails(self):
+    def test_click_uses_one_access_per_edge(self):
         gpio = FakeGpioC()
+        with contextlib.redirect_stdout(io.StringIO()):
+            vbus.cmd_button(gpio, types.SimpleNamespace(action="click", count=2, hold=0, gap=0))
+        edges = [value for kind, _, value in gpio.writes if kind == "w8"]
+        # down, up, down, up, then the final release
+        self.assertEqual(edges, [0xFD, 0xFC, 0xFD, 0xFC, 0xFC])
+        self.assertTrue(gpio.idr())
+
+    def test_click_releases_the_button_even_when_a_step_fails(self):
+        class FailsOnce(FakeGpioC):
+            def write8(self, addr, value):
+                if len([w for w in self.writes if w[0] == "w8"]) == 1 and not getattr(self, "failed", False):
+                    self.failed = True      # the write that should let the button up
+                    raise SwdError("probe went away")
+                super().write8(addr, value)
+
+        gpio = FailsOnce()
         args = types.SimpleNamespace(action="click", count=2, hold=0, gap=0)
-        original = vbus.press_button
-        calls = []
-
-        def failing_press(swd):
-            calls.append(1)
-            if len(calls) == 2:
-                raise SwdError("probe went away")
-            original(swd)
-
-        vbus.press_button = failing_press
-        try:
-            with self.assertRaises(SwdError):
-                vbus.cmd_button(gpio, args)
-        finally:
-            vbus.press_button = original
+        with self.assertRaises(SwdError):
+            vbus.cmd_button(gpio, args)
         self.assertTrue(gpio.idr())
 
 
@@ -255,6 +260,93 @@ class SwdTests(unittest.TestCase):
         self.swd(out).write32(0x48000018, 1 << 18, check=False)
         with self.assertRaises(SwdError):
             self.swd(out).write32(0x48000018, 1 << 18)
+
+
+class OpenOcdTests(unittest.TestCase):
+    def ocd(self, stdout="", stderr=""):
+        def runner(args, **kw):
+            self.args = args
+            return types.SimpleNamespace(stdout=stdout, stderr=stderr)
+        return OpenOcd("/x/openocd", sn="ABC", runner=runner)
+
+    def test_read_parses_words_and_bytes_in_order(self):
+        err = ("Info : STLINK V3J17M10 (API v3) VID:PID 0483:3754\n"
+               "0x48000000: 6bfffbcf \n\n0x48000810: 03 \n")
+        ocd = self.ocd(stderr=err)
+        self.assertEqual(ocd.read((0x48000000, 32), (0x48000810, 8)), [0x6BFFFBCF, 0x03])
+        self.assertIn("mdw 0x48000000", self.args)
+        self.assertIn("mdb 0x48000810", self.args)
+        self.assertIn("adapter serial ABC", self.args)
+        self.assertLess(self.args.index("init"), self.args.index("mdw 0x48000000"))
+        self.assertEqual(self.args[-1], "exit")
+
+    def test_does_not_let_the_target_script_touch_dbgmcu(self):
+        self.ocd(stderr="0x48000000: 00 \n").read((0x48000000, 8))
+        self.assertIn("stm32wbx.cpu configure -event examine-end {}", self.args)
+
+    def test_read_bytes_joins_the_lines_of_a_dump(self):
+        err = ("0x20001000: 00 01 02 03 04 05 06 07 08 09 0a 0b 0c 0d 0e 0f \n"
+               "0x20001010: 10 11 12 13 \n")
+        self.assertEqual(self.ocd(stderr=err).read_bytes(0x20001000, 20), bytes(range(20)))
+        self.assertIn("mdb 0x20001000 20", self.args)
+
+    def test_error_line_is_reported(self):
+        with self.assertRaisesRegex(SwdError, "open failed"):
+            self.ocd(stderr="Error: open failed\n").read((0x48000000, 32))
+
+    def test_unreachable_target_explains_the_debugger_flag(self):
+        err = "Error: init mode failed (unable to connect to the target)\n"
+        with self.assertRaisesRegex(SwdError, "CFG_DEBUGGER_SUPPORTED"):
+            self.ocd(stderr=err).write8(0x48000000, 0xDF)
+
+    def test_writes_and_reset(self):
+        ocd = self.ocd()
+        ocd.write8(0x48000000, 0xDF)
+        self.assertIn("mwb 0x48000000 0xDF", self.args)
+        ocd.write32(0x48000018, 1 << 18, check=False)
+        self.assertIn("mww 0x48000018 0x00040000", self.args)
+        ocd.reset()
+        self.assertIn("reset run", self.args)
+
+
+class ConnectTests(unittest.TestCase):
+    def args(self, **kw):
+        return types.SimpleNamespace(**{"programmer": None, "openocd": None, "sn": None,
+                                        "swd_timeout": 10, **kw})
+
+    def patch(self, programmer, openocd):
+        def find_programmer(explicit=None):
+            if not programmer:
+                raise SwdError("STM32_Programmer_CLI not found")
+            return programmer
+        saved = vbus.find_programmer, vbus.find_openocd
+        vbus.find_programmer, vbus.find_openocd = find_programmer, lambda explicit=None: explicit or openocd
+        self.addCleanup(lambda: setattr(vbus, "find_programmer", saved[0]))
+        self.addCleanup(lambda: setattr(vbus, "find_openocd", saved[1]))
+
+    def test_programmer_is_preferred(self):
+        self.patch("/x/STM32_Programmer_CLI", "/x/openocd")
+        self.assertIsInstance(vbus.connect(self.args()), Swd)
+
+    def test_openocd_when_there_is_no_programmer(self):
+        self.patch(None, "/x/openocd")
+        self.assertIsInstance(vbus.connect(self.args()), OpenOcd)
+
+    def test_openocd_on_request(self):
+        self.patch("/x/STM32_Programmer_CLI", None)
+        swd = vbus.connect(self.args(openocd="/y/openocd"))
+        self.assertIsInstance(swd, OpenOcd)
+        self.assertEqual(swd.programmer, "/y/openocd")
+
+    def test_an_explicit_programmer_that_is_missing_is_an_error(self):
+        self.patch(None, "/x/openocd")
+        with self.assertRaises(SwdError):
+            vbus.connect(self.args(programmer="/nowhere/STM32_Programmer_CLI"))
+
+    def test_nothing_installed(self):
+        self.patch(None, None)
+        with self.assertRaisesRegex(SwdError, "OpenOCD"):
+            vbus.connect(self.args())
 
 
 class HostTests(unittest.TestCase):

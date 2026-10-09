@@ -1,1 +1,5 @@
 conversation-raw.zip
+linux/jvm-probe/build/
+linux/jvm-probe/.gradle/
+linux/jvm-probe/.kotlin/
+__pycache__/

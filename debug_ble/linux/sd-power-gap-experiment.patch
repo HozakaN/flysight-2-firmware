@@ -1,0 +1,252 @@
+--- a/FlySight/resource_manager.c
++++ b/FlySight/resource_manager.c
+@@ -51,6 +51,36 @@
+ 
+ static FATFS fs;
+ 
++/* DIAG: one entry per mount attempt, read over SWD */
++volatile struct
++{
++	uint32_t off_tick;
++	uint32_t count;
++	uint32_t off_rtc;
++	uint32_t prer;
++	struct
++	{
++		uint32_t gap_ms;     /* time the card stayed without power before this mount */
++		uint32_t gap_rtc;    /* the same in RTC sub-second ticks, which also count in stop mode */
++		uint8_t  fr;         /* result of f_mount */
++		uint8_t  stage;      /* where SD_GoIdleState stopped */
++		uint8_t  tries;      /* CMD0 attempts */
++		uint8_t  r1;         /* last R1 answer */
++	} log[32];
++} fs_diag;
++extern volatile uint8_t sd_diag_stage, sd_diag_tries, sd_diag_r1, sd_diag_sdhc, sd_diag_hs;
++
++static uint32_t diag_rtc_ticks(void)
++{
++	uint32_t ssr, tr, ssr2, prediv_s, sec;
++	do { ssr = RTC->SSR; tr = RTC->TR; ssr2 = RTC->SSR; } while (ssr != ssr2);
++	prediv_s = RTC->PRER & 0x7fff;
++	sec = ((tr >> 20) & 3) * 36000 + ((tr >> 16) & 0xf) * 3600 + ((tr >> 12) & 7) * 600
++			+ ((tr >> 8) & 0xf) * 60 + ((tr >> 4) & 7) * 10 + (tr & 0xf);
++	fs_diag.prer = RTC->PRER;
++	return sec * (prediv_s + 1) + (prediv_s - (ssr & 0xffff));
++}
++
+ extern SPI_HandleTypeDef hspi2;
+ 
+ static FS_ResourceManager_Result_t VCC_Init(void)
+@@ -75,6 +105,8 @@
+ 		{
+ 			/* Disable VCC */
+ 			HAL_GPIO_WritePin(VCC_EN_GPIO_Port, VCC_EN_Pin, GPIO_PIN_RESET);
++			fs_diag.off_tick = HAL_GetTick();
++			fs_diag.off_rtc = diag_rtc_ticks();
+ 
+ 			/* Reset GNSS_SAFEBOOT_N */
+ 			HAL_GPIO_WritePin(GNSS_SAFEBOOT_N_GPIO_Port, GNSS_SAFEBOOT_N_Pin, GPIO_PIN_RESET);
+@@ -154,9 +186,21 @@
+ 			}
+ 
+ 			/* Enable microSD card */
+-			if (f_mount(&fs, "0:/", 1) != FR_OK)
+ 			{
+-				Error_Handler();
++				uint32_t gap = HAL_GetTick() - fs_diag.off_tick;
++				uint32_t gap_rtc = diag_rtc_ticks() - fs_diag.off_rtc;
++				FRESULT fr = f_mount(&fs, "0:/", 1);
++				uint32_t i = fs_diag.count++ & 31;
++				fs_diag.log[i].gap_ms = fs_diag.off_tick ? gap : 0xffffffff;
++				fs_diag.log[i].gap_rtc = gap_rtc;
++				fs_diag.log[i].fr = fr;
++				fs_diag.log[i].stage = sd_diag_stage;
++				fs_diag.log[i].tries = sd_diag_tries;
++				fs_diag.log[i].r1 = sd_diag_r1;
++				if (fr != FR_OK)
++				{
++					Error_Handler();
++				}
+ 			}
+ 
+ 			++resource_counts[FS_RESOURCE_FATFS];
+@@ -195,6 +239,93 @@
+ 	}
+ }
+ 
++/* DIAG: cuts the power of the card for a chosen time between two mounts, and records
++ * whether the second mount works. Runs once at start-up, before the BLE stack. */
++volatile struct
++{
++	uint32_t done;
++	uint32_t count;
++	struct
++	{
++		uint32_t gap_us;
++		uint8_t  fr_before;  /* mount after a long rest */
++		uint8_t  fr_after;   /* mount after the gap */
++		uint8_t  stage;
++		uint8_t  tries;
++		uint8_t  r1;
++		uint8_t  sdhc;       /* card type seen by the second mount */
++		uint8_t  hs;         /* result of the high-speed switch of the second mount */
++		uint8_t  sdhc_before;
++	} log[128];
++} fs_sweep;
++
++static uint8_t diag_mount(void)
++{
++	FRESULT fr = FR_INT_ERR;
++	if (FS_ResourceManager_RequestResource(FS_RESOURCE_MICROSD) == FS_RESOURCE_MANAGER_SUCCESS)
++	{
++		MX_FATFS_Init();
++		fr = f_mount(&fs, "0:/", 1);
++	}
++	return fr;
++}
++
++static void diag_unmount(void)
++{
++	f_mount(0, "0:/", 0);
++	MX_FATFS_DeInit();
++	FS_ResourceManager_ReleaseResource(FS_RESOURCE_MICROSD);
++}
++
++static void diag_wait_us(uint32_t us)
++{
++	uint32_t start = DWT->CYCCNT;
++	uint32_t cycles = (SystemCoreClock / 1000000U) * us;
++	while ((DWT->CYCCNT - start) < cycles);
++}
++
++void FS_Diag_Sweep(void)
++{
++	static const uint32_t gaps[] = {0, 50, 100, 200, 300, 400, 500, 700, 1000, 1300, 1600, 2000,
++			2500, 3000, 4000, 5000, 7000, 10000, 20000, 45000};
++	uint32_t pass, i, n;
++
++	CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
++	DWT->CYCCNT = 0;
++	DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
++
++	for (pass = 0; pass < 6; ++pass)
++	{
++		for (i = 0; i < sizeof(gaps) / sizeof(gaps[0]); ++i)
++		{
++			n = fs_sweep.count;
++
++			/* Long rest without power, then a first mount */
++			HAL_Delay(2000);
++			fs_sweep.log[n].fr_before = diag_mount();
++			fs_sweep.log[n].sdhc_before = sd_diag_sdhc;
++			diag_unmount();
++
++			if (gaps[i] > 0)
++			{
++				diag_wait_us(gaps[i]);
++			}
++
++			fs_sweep.log[n].gap_us = gaps[i];
++			fs_sweep.log[n].fr_after = diag_mount();
++			fs_sweep.log[n].stage = sd_diag_stage;
++			fs_sweep.log[n].tries = sd_diag_tries;
++			fs_sweep.log[n].r1 = sd_diag_r1;
++			fs_sweep.log[n].sdhc = sd_diag_sdhc;
++			fs_sweep.log[n].hs = sd_diag_hs;
++			diag_unmount();
++
++			fs_sweep.count = n + 1;
++		}
++	}
++	fs_sweep.done = 1;
++}
++
+ void FS_ResourceManager_Init(void)
+ {
+ 	uint8_t i;
+--- a/Drivers/BSP/stm32_adafruit_sd.c
++++ b/Drivers/BSP/stm32_adafruit_sd.c
+@@ -261,6 +261,7 @@
+       1 : High capacity
+ */
+ uint16_t flag_SDHC = 0;
++extern volatile uint8_t sd_diag_sdhc, sd_diag_hs;
+ 
+ /* Static buffer for SPI dummy receive data during writes */
+ static uint8_t sd_dummy_buf[512];
+@@ -314,9 +315,11 @@
+   /* SD initialized and set to SPI mode properly */
+   result = SD_GoIdleState();
+ 
++  sd_diag_sdhc = flag_SDHC; sd_diag_hs = 0xff;
+   if (result == BSP_SD_OK)
+   {
+-    if (SD_EnableHighSpeedMode() == BSP_SD_OK)
++    sd_diag_hs = SD_EnableHighSpeedMode();
++    if (sd_diag_hs == BSP_SD_OK)
+     {
+       /* Card accepted SD high-speed mode; restore CubeMX operating speed. */
+       SD_IO_SetFastSpeed();
+@@ -1129,20 +1132,22 @@
+   * @param  None
+   * @retval SD status
+   */
++volatile uint8_t sd_diag_stage, sd_diag_tries, sd_diag_r1, sd_diag_sdhc, sd_diag_hs;
+ uint8_t SD_GoIdleState(void)
+ {
+   SD_CmdAnswer_typedef response;
+   __IO uint8_t counter = 0;
++  sd_diag_stage = 0; sd_diag_tries = 0; sd_diag_r1 = 0xee;
+   /* Send CMD0 (SD_CMD_GO_IDLE_STATE) to put SD in SPI mode and
+      wait for In Idle State Response (R1 Format) equal to 0x01 */
+   do{
+-    counter++;
++    counter++; sd_diag_tries = counter;
+     response = SD_SendCmd(SD_CMD_GO_IDLE_STATE, 0, 0x95, SD_ANSWER_R1_EXPECTED);
+     SD_IO_CSState(1);
+     SD_IO_WriteByte(SD_DUMMY_BYTE);
+     if(counter >= SD_MAX_TRY)
+     {
+-      return BSP_SD_ERROR;
++      { sd_diag_stage = 1; sd_diag_r1 = response.r1; return BSP_SD_ERROR; }
+     }
+   }
+   while(response.r1 != SD_R1_IN_IDLE_STATE);
+@@ -1198,7 +1203,7 @@
+         SD_IO_WriteByte(SD_DUMMY_BYTE);
+         if(response.r1 != SD_R1_IN_IDLE_STATE)
+         {
+-          return BSP_SD_ERROR;
++          { sd_diag_stage = 2; sd_diag_r1 = response.r1; return BSP_SD_ERROR; }
+         }
+         /* Send ACMD41 (SD_CMD_SD_APP_OP_COND) to initialize SDHC or SDXC cards: R1 response (0x00: no errors) */
+         response = SD_SendCmd(SD_CMD_SD_APP_OP_COND, 0x00000000, 0xFF, SD_ANSWER_R1_EXPECTED);
+@@ -1214,15 +1219,16 @@
+     SD_IO_WriteByte(SD_DUMMY_BYTE);
+     if(response.r1 != SD_R1_NO_ERROR)
+     {
+-      return BSP_SD_ERROR;
++      { sd_diag_stage = 3; sd_diag_r1 = response.r1; return BSP_SD_ERROR; }
+     }
+     flag_SDHC = (response.r2 & 0x40) >> 6;
+   }
+   else
+   {
+-    return BSP_SD_ERROR;
++    { sd_diag_stage = 4; sd_diag_r1 = response.r1; return BSP_SD_ERROR; }
+   }
+ 
++  sd_diag_stage = 100; sd_diag_r1 = response.r1;
+   return BSP_SD_OK;
+ }
+ 
+--- a/Core/Src/main.c
++++ b/Core/Src/main.c
+@@ -174,6 +174,7 @@
+   MX_RF_Init();
+   /* USER CODE BEGIN 2 */
+   FS_State_Init();
++  { extern void FS_Diag_Sweep(void); FS_Diag_Sweep(); }
+   FS_IMU_Init();
+   FS_Mag_Init();
+   FS_Baro_Init();

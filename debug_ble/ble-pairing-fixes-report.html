@@ -125,7 +125,7 @@
   <tr><th>Android</th><td>The issue does not appear on Android.</td></tr>
   <tr><th>Hypothesis: the difference between the platforms</th><td>macOS hides the real MAC address and cannot remap it after the FlySight pairing process restarts.</td></tr>
 </table>
-<p><strong>Why start a new pairing process.</strong> To trigger advertising when the FlySight does not restart it. A bug was found about that (<a href="#b2">bug 2</a>).</p>
+<p><strong>Why start a new pairing process.</strong> To trigger advertising when the FlySight does not restart it. A bug was found about that (<a href="#b2">bug 2</a>). During development it also makes the work a lot faster.</p>
 
 <h2 id="found">What the investigation found</h2>
 <ul>
@@ -522,6 +522,427 @@ while (is_all_zeros(state.ble_irk, CONFIG_DATA_IR_LEN)) { ... }</code></pre>
 -	... (the lines now in FS_State_Complete)</span>
 <span class="add">+	FS_State_Complete();</span>
  }</code></pre>
+
+
+<!-- ================================================================== -->
+<h1 id="linux">Linux: the same tests from a Linux PC, and three more bugs</h1>
+<div class="meta">Added on 9 October 2026, after the report above. Same board, same commits of <code>master</code> (<code>9ec7186</code>) and <code>develop</code> (<code>e67ee9f</code>), from a PC under Ubuntu 24.04 (kernel 6.8, BlueZ 5.72 as shipped).</div>
+
+<p>The tests of the report above were run again from Linux. What they add:</p>
+<ul>
+  <li><strong>Linux is not affected by bug 1</strong>, and bug 2 shows there as from the other hosts. What a Linux host needs in order to pair is on its own side, and goes in the documentation (<a href="#linux-hosts">section 7</a>).</li>
+  <li><strong>Three more firmware bugs</strong>, numbered 4 to 6 after the three above. All three exist on unmodified <code>master</code> and <code>develop</code>. Each has its fix in commits of its own on the branch, outside the patch of <a href="#patch">section 6</a>.</li>
+</ul>
+<table>
+  <tr><th>#</th><th>Bug</th><th>Seen on</th><th>Proposed change</th></tr>
+  <tr><td>4</td><td>A reset while <code>flysight.txt</code> is being written makes the FlySight draw new BLE keys, and the rest of the file is lost</td><td><code>master</code>, <code>develop</code></td><td><code>state.c</code>, <code>FS_State_Write()</code>: write a second file, then put it in place of the first</td></tr>
+  <tr><td>5</td><td>A file command that arrives right behind the last acknowledgement of a file read is dropped without an answer</td><td><code>master</code>, <code>develop</code></td><td><code>crs.c</code>, <code>FS_CRS_State_Read()</code>: stop at the last acknowledgement</td></tr>
+  <tr><td>6</td><td>A microSD card powered again about 1 ms after losing power leaves the firmware in <code>Error_Handler()</code></td><td><code>master</code>, <code>develop</code></td><td><code>resource_manager.c</code>, <code>VCC_DeInit()</code>: keep the supply off for 50 ms</td></tr>
+</table>
+<p>Each section below is glossary, problem, proposed fix, tests.</p>
+
+<nav class="toc"><strong>Contents of the Linux part</strong>
+<ul>
+  <li><a href="#linux-hosts">7. Linux: bugs 1 and 2 from a Linux PC, and what a Linux host needs to pair</a></li>
+  <li><a href="#state">8. Linux, bug 4: a reset while <code>flysight.txt</code> is being written changes the BLE keys</a></li>
+  <li><a href="#crs">9. Linux, bug 5: a command dropped behind the last file acknowledgement</a></li>
+  <li><a href="#vcc">10. Linux, bug 6: a microSD card powered again too soon locks the FlySight</a></li>
+</ul></nav>
+
+<!-- ================================================================== -->
+<h2 id="linux-hosts"><span class="num">7.</span>Linux: bugs 1 and 2 from a Linux PC, and what a Linux host needs to pair</h2>
+
+<h3 class="step">Glossary</h3>
+<dl>
+  <dt>BlueZ</dt>
+  <dd>The Bluetooth stack of Linux. An application talks to it over D-Bus.</dd>
+  <dt>Pairing agent</dt>
+  <dd>An object that an application registers with BlueZ (<code>org.bluez.AgentManager1.RegisterAgent</code>), and that BlueZ asks to accept a pairing.</dd>
+  <dt>Library, SkyGames</dt>
+  <dd>"Library" is the native BLE layer of the SkyGames desktop application, driven by a script. "SkyGames" is the application itself.</dd>
+</dl>
+
+<h3 class="step">Problem</h3>
+<p><strong>Bugs 1 and 2.</strong> Linux is not affected by <a href="#b1">bug 1</a>. The firmware sees the PC connect from its public identity address, with no RPA: the same kind of connection as the Mac's. It is accepted with and without the fix of bug 1, on the four builds of <a href="#table-c">table C</a> and on the instrumented build with the Device Privacy call switched off and on. That is the difference with the Mac: with its default configuration (<code>Privacy</code> off) a Linux host gives the FlySight no identity resolving key when it bonds, and the specification makes a controller ignore the identity address only of a peer that has given one. <a href="#b2">Bug 2</a> shows from Linux exactly as from the other hosts.</p>
+<p><strong>The first pairing.</strong> What stops a Linux host is on its own side. Without a pairing agent registered by the application, BlueZ refuses the pairing, whether it is triggered by reading <code>FT_Packet_In</code> or requested explicitly: the firmware records <code>PAIRING_COMPLETE</code> with status 2 and reason <code>0x0c</code>, and closes the link at its 30-second timeout. With an agent, the pairing completes and the PC is bonded.</p>
+
+<h3 class="step">Proposed fix</h3>
+<p>Nothing to change in the firmware. One line in <code>Docs/ble.md</code>, where pairing is described (commit <em>Linux: what a host needs to pair, test tools, results and log</em>):</p>
+<div class="file">Docs/ble.md</div>
+<pre><code><span class="add">+    *   **Linux (BlueZ):** Reading a secure characteristic is not enough there. BlueZ refuses the "Just Works"
++        pairing, whether triggered by that read or requested with `Device1.Pair`, unless the application has
++        registered a pairing agent (`org.bluez.AgentManager1.RegisterAgent`); without one the adapter is not
++        even bondable. With an agent registered, call `Device1.Pair` after connecting. Measured with BlueZ 5.72:
++        without an agent the FlySight reports a failed pairing (reason `0x0c`) and closes the link at the
++        30-second timeout.</span></code></pre>
+<p>In the file it is a single line; it is folded here.</p>
+
+<h3 class="step">Tests</h3>
+<p id="table-c"><strong>Table C. Linux.</strong> The four builds of <a href="#table-b">table B</a>, cable unplugged, from the Linux PC, bonded with the board beforehand. The library connects, reads <code>FT_Packet_In</code> and sends a ping. For SkyGames, "connects" means it shows the device as connected and has read its configuration file.</p>
+<table>
+  <tr><th>Firmware</th><th>Linux library connects, FlySight idle</th><th>Linux library connects, FlySight in pairing mode</th><th>SkyGames app connects, pairing mode and idle</th><th>Pairing window left to expire</th></tr>
+  <tr><td><code>master</code> <code>9ec7186</code>, unmodified</td><td class="ok">connects, encrypted read OK</td><td class="ok">connects, encrypted read OK</td><td class="ok">connects in both</td><td class="ok"><code>01</code> for 33 s, then <code>00</code>, still advertising at 255 s</td></tr>
+  <tr><td><code>master</code> + patch</td><td class="ok">connects, encrypted read OK</td><td class="ok">connects, encrypted read OK</td><td class="ok">connects in both</td><td class="ok"><code>01</code> for 30 s, then <code>00</code>, still advertising at 255 s</td></tr>
+  <tr><td><code>develop</code> <code>e67ee9f</code>, unmodified</td><td class="ok">connects, encrypted read OK</td><td class="ok">connects, encrypted read OK</td><td class="ok">connects in both</td><td class="ko"><code>01</code> for 209 s, then no advertising</td></tr>
+  <tr><td><code>develop</code> + patch</td><td class="ok">connects, encrypted read OK</td><td class="ok">connects, encrypted read OK</td><td class="ok">connects in both</td><td class="ok"><code>01</code> for 30 s, then <code>00</code>, still advertising at 254 s</td></tr>
+</table>
+<p>The branch build with the fixes of bugs 5 and 6 went through the same pass, with the same results (window <code>01</code> for 34 s, then <code>00</code>, still advertising at 255 s).</p>
+<p>The scripts are in <code>linux/README.md</code>, next to this report.</p>
+<div class="callout warn">
+<p><strong>Limits of the tests on Linux.</strong></p>
+<ul>
+  <li>One Linux PC (Ubuntu 24.04, BlueZ 5.72), with the same board. No other distribution and no other version of BlueZ.</li>
+  <li>On Linux the address of the PC was recorded on the instrumented build only; on the four builds of <a href="#table-c">table C</a> the result is what the script and the application report. The table is one pass over the four builds, in that order, each flashed once and never run again. In an earlier pass, <code>master</code> + patch had ended in the error handler of <a href="#vcc">bug 6</a>.</li>
+  <li>As in the first part, all test builds had <code>CFG_DEBUGGER_SUPPORTED</code> set to 1.</li>
+</ul>
+</div>
+
+<!-- ================================================================== -->
+<h2 id="state"><span class="num">8.</span>Linux, bug 4: a reset while <code>flysight.txt</code> is being written changes the BLE keys</h2>
+
+<p>Found while testing from Linux, then reproduced on purpose. It is one commit on the branch, <em>Keep the previous flysight.txt until the new one is written</em> (<code>ba7e1d8</code>). It is not in the patch of <a href="#patch">section 6</a>: the three fixes above do not need it.</p>
+
+<h3 class="step">Glossary</h3>
+<dl>
+  <dt>State file</dt>
+  <dd><code>/flysight.txt</code> on the microSD card. Besides the settings a user may edit, it holds what the firmware must find again at the next start: <code>BLE_IRK</code> and <code>BLE_ERK</code> (see <a href="#b3">bug 3</a>), <code>Session_ID</code>, <code>Temp_Folder</code>, <code>Config_File</code>. <code>Session_ID</code> is a random number drawn for each session, <code>Temp_Folder</code> the number of the folder of <code>/temp</code> the last session was written to, <code>Config_File</code> the configuration chosen in config mode.</dd>
+  <dt>Active mode, start mode, config mode</dt>
+  <dd>What the button starts from sleep. Active mode logs a jump; start mode takes its place when <code>Active_Mode</code> is 1 in the state file; config mode announces the files of the <code>/config</code> folder of the card one after the other, and a press chooses the one being announced. Each of those files names, on its <code>Init_File</code> line, the audio file that announces it.</dd>
+  <dt>FatFs, cluster, FAT</dt>
+  <dd>FatFs is the file-system library of the firmware. It stores a file in clusters and keeps the table of the free ones, the FAT, on the card. A card is full when no cluster is free.</dd>
+  <dt><code>FA_CREATE_ALWAYS</code></dt>
+  <dd>The FatFs option that opens a file for writing and, if it exists, empties it first.</dd>
+  <dt><code>FUS_Ver</code>, <code>Stack_Ver</code></dt>
+  <dd>Two lines of the state file: the versions of the radio firmware, which runs on the second processor of the microcontroller.</dd>
+  <dt>SWD</dt>
+  <dd>The debug link of the ST-Link probe. A script uses it to stop the firmware at a chosen instruction, read its memory, drive a pin or reset it.</dd>
+  <dt>VBUS</dt>
+  <dd>The 5 V of the USB cable. The firmware reads it on a pin to know whether the cable is in; holding that pin low over SWD makes it see the cable out.</dd>
+</dl>
+
+<h3 class="step">Problem</h3>
+<p><code>FS_State_Init()</code> runs at every start. It reads the state file, then writes it back from memory:</p>
+<div class="file">FlySight/state.c</div>
+<pre><code>void FS_State_Init(void)
+{
+	FS_ResourceManager_RequestResource(FS_RESOURCE_FATFS);
+	FS_State_Read();
+	FS_State_Write();                              <span class="cm">// at every start</span>
+	FS_ResourceManager_ReleaseResource(FS_RESOURCE_FATFS);
+}
+
+static void FS_State_Write(void)
+{
+	...
+	if (f_open(&amp;stateFile, "/flysight.txt", FA_WRITE|FA_CREATE_ALWAYS) != FR_OK)   <span class="cm">// the file is empty from here...</span>
+	...
+	f_close(&amp;stateFile);                                                          <span class="cm">// ...to here</span>
+}</code></pre>
+<p>Between those two lines the card holds an empty <code>flysight.txt</code>, and a reset there leaves it empty. At the next start the firmware opens it, reads no <code>BLE_IRK</code> and no <code>BLE_ERK</code>, draws new ones and writes them. The change is permanent: bonded devices no longer recognise the FlySight and have to pair again, and the other values of the file are back to their defaults.</p>
+<p><strong>Measured</strong> on the bench build of the branch, with breakpoints on three starts: the write begins 125 ms after the reset, the file is emptied at 130 ms and closed at 145 ms. A reset sent over SWD with the firmware stopped in <code>FS_State_Write()</code> changed the keys 6 times out of 6. Each time the next start was caught at the call that draws the new IRK, and the root directory it had just read showed <code>FLYSIGHT.TXT</code> with a size of 0 and no cluster. Resets sent 50 ms earlier (4), after the file is closed (68) or with the card off (17) all kept the keys. The keys were compared by the SHA-1 of what the firmware holds in memory.</p>
+<p>The same write is done in three other places, with the same window: when active mode or start mode starts (<code>FS_State_NextSession()</code>, which increments <code>Temp_Folder</code> and draws a new <code>Session_ID</code>), when config mode ends (<code>FS_State_SetConfigFilename()</code>) and after USB is unplugged (<code>FS_State_Update()</code>). A reset sent there with the firmware stopped just after the file is opened changed the keys every time, on <code>master</code>, on <code>develop</code> and on the branch without the fix: 6 times out of 6 as active mode starts, 6 out of 6 after a USB unplug, 5 out of 5 as a press leaves config mode, and once more with the cable pulled out by hand. The whole file is lost with the keys: <code>Temp_Folder</code> is back to 0000, and the sessions that follow are written over <code>/temp/0001</code> and the next ones.</p>
+
+<h3 class="step">Proposed fix</h3>
+<p>Write the new state next to the previous one, and replace the previous one only once the new one is complete. A reset between the removal and the renaming leaves only the new file, which the next start puts in place. When the new file cannot be written, give it up at the first write that fails and write in place as before:</p>
+<div class="file">FlySight/state.c</div>
+<pre><code><span class="add">+#define STATE_FILE "/flysight.txt"
++#define STATE_TEMP "/flysight.tmp"</span>
+ ...
+ void FS_State_Read(void)
+ {
+ 	...
+<span class="del">-	if (f_open(&amp;stateFile, "/flysight.txt", FA_READ) != FR_OK)</span>
+<span class="add">+	if (f_open(&amp;stateFile, STATE_FILE, FA_READ) != FR_OK)</span>
+ 	{
+<span class="add">+		/* A reset between the removal of the previous state file and the renaming of
++		   the new one leaves only the new one: put it in place and read it */
++		if ((f_rename(STATE_TEMP, STATE_FILE) != FR_OK) ||
++				(f_open(&amp;stateFile, STATE_FILE, FA_READ) != FR_OK))
++		{</span>
+ 			FS_State_Complete();
+ 			return;
+<span class="add">+		}</span>
+ 	}
+ 	...
+ }
+
+<span class="del">-static void FS_State_Write(void)</span>
+<span class="add">+/* Writes the state to stateFile, which is open, and closes it.
++   Returns 0 if part of it did not reach the card. */
++static uint8_t FS_State_WriteContent(void)</span>
+ {
+ 	...
+<span class="del">-	if (f_open(&amp;stateFile, "/flysight.txt", FA_WRITE|FA_CREATE_ALWAYS) != FR_OK)
+-	{
+-		Error_Handler();
+-	}</span>
+
+ 	// Write device info
+<span class="del">-	f_printf(&amp;stateFile, "; FlySight - http://flysight.ca\n\n");</span>
+<span class="add">+	if (f_printf(&amp;stateFile, "; FlySight - http://flysight.ca\n\n") &lt; 0)
++	{
++		// Nothing can be written. On a full card each further write would
++		// search the whole FAT for a free cluster before it fails as well
++		f_close(&amp;stateFile);
++		return 0;
++	}</span>
+ 	...                                            <span class="cm">// the other f_printf() calls, unchanged</span>
+<span class="del">-	f_printf(&amp;stateFile, "\n");
+-	f_close(&amp;stateFile);</span>
+<span class="add">+	// On a full card every write fails from some point on, this last one
++	// included, and FatFs does not count that as an error of the file
++	complete = (f_printf(&amp;stateFile, "\n") &gt;= 0) &amp;&amp; !f_error(&amp;stateFile);
++	return (f_close(&amp;stateFile) == FR_OK) &amp;&amp; complete;
++}
++
++static void FS_State_Write(void)
++{
++	// Write the new FlySight info file next to the previous one, which stays
++	// valid until the new one is complete
++	if ((f_open(&amp;stateFile, STATE_TEMP, FA_WRITE|FA_CREATE_ALWAYS) == FR_OK) &amp;&amp;
++			FS_State_WriteContent())
++	{
++		// Replace the previous file
++		f_unlink(STATE_FILE);
++		f_rename(STATE_TEMP, STATE_FILE);
++		return;
++	}
++
++	// No room for a second file: rewrite the previous one in place
++	f_unlink(STATE_TEMP);
++	if (f_open(&amp;stateFile, STATE_FILE, FA_WRITE|FA_CREATE_ALWAYS) != FR_OK)
++	{
++		Error_Handler();
++	}
++	FS_State_WriteContent();</span>
+ }</code></pre>
+<p>The hunks are those of the branch, on top of the patch of <a href="#patch">section 6</a>: <code>FS_State_Complete()</code> is the helper of <a href="#b3">bug 3</a>. On <code>master</code> and <code>develop</code> without that patch the change is the same, with <code>return;</code> alone at that place.</p>
+<p>The last branch of <code>FS_State_Write()</code> is there for a card with no free cluster. The code before the fix gets through on such a card, because emptying the file frees the cluster it writes to next; with that branch a full card behaves as it did before the fix, window included.</p>
+<p>The two checks in <code>FS_State_WriteContent()</code> both come from the way FatFs treats a write that finds no room: it does not report it as an error, and it searches the whole FAT before each one fails. Without the check of the last write, a good file would have been replaced by an incomplete one. With that check alone, which was a first version of the fix, writing the state took 43 s on a card that was really full, one search for each of 136 writes: the check of the first write was added for that.</p>
+<p>The fix is in <code>FS_State_Write()</code>, so it covers the four places where the state is written. It protects the file from then on: it does not bring back a <code>flysight.txt</code> that a firmware without it has already emptied. What it costs, from the measurements below:</p>
+<ul>
+  <li>the write takes 10 to 20 ms longer: 31 to 43 ms where it took 20 to 24, and 27 to 36 ms where it took 19 to 20 after the cable was pulled out by hand. One measurement out of eighteen took 93 ms;</li>
+  <li>on a card with no free cluster it takes about a third of a second instead of 20 ms: one search of the FAT, then the write in place. That time grows with the size of the FAT;</li>
+  <li>a <code>FLYSIGHT.TMP</code> stays on the card after a write that a reset interrupted, until the next write of the state.</li>
+</ul>
+
+<h3 class="step">Tests</h3>
+<p><strong>Resets at start-up.</strong> The same resets on each build, sent over SWD with the firmware stopped at the place named. <code>master</code> and <code>develop</code> are the published commits; "+ fix" is the same with this fix and nothing else; the branch has the fixes of this report as well. "Kept" and "changed" are about the keys.</p>
+<table>
+  <tr><th>Reset sent with the firmware stopped&hellip;</th><th><code>master</code></th><th><code>master</code> + fix</th><th><code>develop</code></th><th><code>develop</code> + fix</th><th>branch</th></tr>
+  <tr><td>nowhere: an ordinary reset</td><td class="ok">kept 3/3</td><td class="ok">kept 3/3</td><td class="ok">kept 3/3</td><td class="ok">kept 3/3</td><td class="ok">kept 3/3</td></tr>
+  <tr><td>just after the state file is opened for reading</td><td class="ok">kept 3/3</td><td class="ok">kept 3/3</td><td class="ok">kept 3/3</td><td class="ok">kept 3/3</td><td class="ok">kept 3/3</td></tr>
+  <tr><td>just after the file to write is opened</td><td class="ko">changed 4/4</td><td class="ok">kept 4/4</td><td class="ko">changed 4/4</td><td class="ok">kept 4/4</td><td class="ok">kept 4/4</td></tr>
+  <tr><td>new file complete, previous one about to be removed</td><td>n/a</td><td class="ok">kept 4/4</td><td>n/a</td><td class="ok">kept 4/4</td><td class="ok">kept 4/4</td></tr>
+  <tr><td>previous file removed, renaming skipped by the debugger</td><td>n/a</td><td class="ok">kept 3/3</td><td>n/a</td><td class="ok">kept 3/3</td><td class="ok">kept 3/3</td></tr>
+  <tr><td>after a start in which the debugger refused the new file its first cluster</td><td>n/a</td><td class="ok">kept 3/3</td><td>n/a</td><td class="ok">kept 3/3</td><td class="ok">kept 3/3</td></tr>
+  <tr><td>everything written and closed, card still powered</td><td class="ok">kept 3/3</td><td class="ok">kept 3/3</td><td class="ok">kept 3/3</td><td class="ok">kept 3/3</td><td class="ok">kept 3/3</td></tr>
+</table>
+<p>Without the fix, each of the 8 resets of the third row was followed by a start caught drawing a new IRK, and the PC had to pair again. With it, a start that found <code>/flysight.txt</code> missing put the new file in its place and read the same keys, 3 times out of 3 in row five on each build. In row four the reset came before the removal in this series and the next start was an ordinary one; in the series run with the first version of the fix it came after it, 4 times out of 4 on each build, and the next start put the file back the same way. In row six the firmware gave up the second file and rewrote the first in place, 3 times out of 3 on each build. The script is <code>linux/state_rewrite_reset.py</code>.</p>
+
+<p><strong>Outside start-up.</strong> With the USB cable of the FlySight plugged into the PC, which mounts the card and reads <code>FLYSIGHT.TXT</code> from it after each step. The button and the VBUS detection pin are driven over SWD. The branch is taken without this fix and with it.</p>
+<table>
+  <tr><th>Test</th><th>branch without the fix</th><th>branch</th><th><code>master</code></th><th><code>master</code> + fix</th><th><code>develop</code></th><th><code>develop</code> + fix</th></tr>
+  <tr><td>Active mode entered and left, twice</td><td class="ok">OK</td><td class="ok">OK</td><td class="ok">OK</td><td class="ok">OK</td><td class="ok">OK</td><td class="ok">OK</td></tr>
+  <tr><td>Start mode entered and left</td><td class="ok">OK</td><td class="ok">OK</td><td class="ok">OK</td><td class="ok">OK</td><td class="ok">OK</td><td class="ok">OK</td></tr>
+  <tr><td>Config mode</td><td class="ok">OK</td><td class="ok">OK</td><td class="ok">OK</td><td class="ok">OK</td><td class="ok">OK</td><td class="ok">OK</td></tr>
+  <tr><td>USB unplugged and plugged back, the PC as host</td><td class="ok">OK 3/3</td><td class="ok">OK 2/2</td><td class="ok">OK 3/3</td><td class="ok">OK 2/2</td><td class="ok">OK 3/3</td><td class="ok">OK 2/2</td></tr>
+  <tr><td>Reset just after the file to write is opened, as active mode starts</td><td class="ko">keys changed 2/2</td><td class="ok">kept 2/2</td><td class="ko">keys changed 2/2</td><td class="ok">kept 2/2</td><td class="ko">keys changed 2/2</td><td class="ok">kept 2/2</td></tr>
+  <tr><td>The same reset, in the write that follows a USB unplug</td><td class="ko">keys changed 2/2</td><td class="ok">kept 2/2</td><td class="ko">keys changed 2/2</td><td class="ok">kept 2/2</td><td class="ko">keys changed 2/2</td><td class="ok">kept 2/2</td></tr>
+</table>
+<p>"OK" is: the mode is entered; <code>Temp_Folder</code> goes up by one and a new <code>Session_ID</code> is drawn where the mode does that; the keys are the same before, during and after; and the PC then reads a complete <code>FLYSIGHT.TXT</code> holding the new values, with no <code>FLYSIGHT.TMP</code> next to it. In this table the card has no <code>/config</code> folder, so config mode ends at once and what is exercised is the write at its end; and a USB unplug is VBUS held low while the PC has the card mounted. A cable really pulled out and a <code>/config</code> folder are the next two tables. Every start was made to see VBUS low, because <code>develop</code> faults when it starts with the cable in. The script is <code>linux/state_modes.py</code>.</p>
+
+<p><strong>A cable really pulled out.</strong> Someone pulls the cable of the FlySight out of the PC and plugs it back in each time <code>linux/state_real_unplug.py</code> asks for it; the script sees by itself that it was done. The 14 pulls of the table are two per build, and a third on the two builds of the branch. Each build is flashed with the cable out, on the battery.</p>
+<table>
+  <tr><th>Test</th><th>branch without the fix</th><th>branch</th><th><code>master</code></th><th><code>master</code> + fix</th><th><code>develop</code></th><th><code>develop</code> + fix</th></tr>
+  <tr><td>Cable pulled out with the card mounted on the PC, nothing stopping the firmware</td><td class="ok">OK</td><td class="ok">OK</td><td class="ok">OK</td><td class="ok">OK</td><td class="ok">OK</td><td class="ok">OK</td></tr>
+  <tr><td>Cable pulled out after the PC ejected the card: writes of the state file, time of the write</td><td>1, 20 ms</td><td>1, 27 ms</td><td>1, 20 ms</td><td>1, 36 ms</td><td>1, 19 ms</td><td>1, 35 ms</td></tr>
+  <tr><td>Cable pulled out, and a reset just after the file to write is opened</td><td class="ko">keys changed</td><td class="ok">kept</td><td>not run</td><td>not run</td><td>not run</td><td>not run</td></tr>
+</table>
+<p>"OK" is: four seconds after the pull the firmware is asleep with the same keys; plugged back in, the PC reads a complete <code>FLYSIGHT.TXT</code> with the same keys and the same <code>Temp_Folder</code>, and no <code>FLYSIGHT.TMP</code>. There is one write per pull: the falling VBUS does not bounce into a second one. The file read after the pull is one byte longer than the one read before it. On the last build the two were compared field by field: the difference is <code>FUS_Ver</code> and <code>Stack_Ver</code>, which read <code>8.0.0</code> in a file written at start-up, before the second processor runs, and <code>1.2.0</code> and <code>1.19.0</code> afterwards. That is so with and without the fix. After the reset on the branch without the fix the whole file was lost, not only the keys: <code>Temp_Folder</code> was back to 0000, so the sessions that follow are written over <code>/temp/0001</code> and the next ones.</p>
+
+<p><strong>Config mode with a <code>/config</code> folder.</strong> The card is given a <code>/config</code> folder with three files, <code>ALPHA.TXT</code>, <code>BRAVO.TXT</code> and <code>CHARLIE.TXT</code>, each holding an <code>Init_File</code> line. The card has no <code>/audio</code> folder, so nothing is played and each file is announced for about half a second.</p>
+<table>
+  <tr><th>Test</th><th>branch without the fix</th><th>branch</th><th><code>master</code></th><th><code>master</code> + fix</th><th><code>develop</code></th><th><code>develop</code> + fix</th></tr>
+  <tr><td>Config mode goes through the three files and ends by itself</td><td class="ok">OK</td><td class="ok">OK</td><td class="ok">OK</td><td class="ok">OK</td><td class="ok">OK</td><td class="ok">OK</td></tr>
+  <tr><td>A press while a file is announced, then active mode entered and left</td><td>OK 14/15</td><td class="ok">OK 2/2</td><td class="ok">OK 2/2</td><td class="ok">OK 2/2</td><td class="ok">OK 2/2</td><td class="ok">OK 2/2</td></tr>
+  <tr><td>Reset just after the file to write is opened, as the press leaves config mode</td><td class="ko">keys changed 1/1</td><td class="ok">kept 2/2</td><td class="ko">keys changed 2/2</td><td class="ok">kept 2/2</td><td class="ko">keys changed 2/2</td><td class="ok">kept 2/2</td></tr>
+</table>
+<p>First line: <code>Config_File</code> ends empty, in the firmware and in the file the PC reads. Second line: <code>Config_File</code> holds the name of a file of the folder, the same in the firmware and on the card (<code>ALPHA.TXT</code>, the first: the press came earlier than aimed); active mode then reads that file from inside <code>/config</code> and writes the state while <code>/config</code> is the current directory: <code>Temp_Folder</code> goes up by one, the keys are kept, and no state file appears in <code>/config</code>. Third line: with the fix the keys and <code>Config_File</code> are those of before the press; without it the keys change and <code>Config_File</code> is emptied.</p>
+<p><strong>Time added.</strong> Time spent in <code>FS_State_Write()</code>, from the millisecond counter of the firmware, three measurements each:</p>
+<table>
+  <tr><th></th><th>branch without the fix</th><th>branch</th><th><code>master</code></th><th><code>master</code> + fix</th><th><code>develop</code></th><th><code>develop</code> + fix</th></tr>
+  <tr><td>At start-up</td><td>20 to 23 ms</td><td>31 to 32 ms</td><td>20 ms</td><td>40 to 43 ms</td><td>20 ms</td><td>39, 40 and 93 ms</td></tr>
+  <tr><td>When active mode starts</td><td>21 to 24 ms</td><td>40 ms</td><td>20 ms</td><td>40 to 43 ms</td><td>21 to 24 ms</td><td>40 to 41 ms</td></tr>
+</table>
+
+<p><strong>A card that is really full.</strong> A test build gives one file every free cluster of the card, 63&nbsp;365 clusters or 2.07 GB, after which the PC reports 0 KB free (<code>linux/card-fill-test.patch</code>). On that card:</p>
+<table>
+  <tr><th></th><th>Without the fix</th><th>With the first version of the fix</th><th>With the fix</th></tr>
+  <tr><td>Time spent in <code>FS_State_Write()</code> at start-up</td><td>20 ms</td><td class="ko">42 to 43 s</td><td>338 to 341 ms</td></tr>
+  <tr><td>Two starts</td><td class="ok">state rewritten, keys kept</td><td>keys kept; the firmware was still writing 4 s after each start</td><td class="ok">second file given up, state rewritten in place, keys kept</td></tr>
+  <tr><td>USB unplugged and plugged back</td><td class="ok">OK</td><td>not judged: the write was not over when the test looked</td><td class="ok">OK</td></tr>
+  <tr><td>Active mode entered and left</td><td class="ok">OK on the branch and on <code>master</code></td><td>not judged, for the same reason</td><td class="ok">OK</td></tr>
+</table>
+<p>The first column is the branch without this fix, <code>master</code> and <code>develop</code>; the two others are the same three with the fix. One cell is missing in the first column: on <code>develop</code> the firmware had not finished entering active mode 6 s after the press, busy looking for free clusters for its own files, so the test pressed again too early. The last column allowed 20 s.</p>
+
+<div class="callout warn">
+<p><strong>Limits of the tests of this fix.</strong></p>
+<ul>
+  <li>One board and one card: a 2 GB FAT16 volume with 32 KB clusters.</li>
+  <li>Every reset was sent by the debugger. No real-life cause was tried, such as a battery too low to get through a start.</li>
+  <li>Active mode lasted a few seconds on a bench: no jump.</li>
+  <li>The card had no <code>/audio</code> folder: config mode had nothing to play.</li>
+</ul>
+</div>
+
+<!-- ================================================================== -->
+<h2 id="crs"><span class="num">9.</span>Linux, bug 5: a command dropped behind the last file acknowledgement</h2>
+
+<p>One commit on the branch, <em>Do not drop a command that follows the last file acknowledgement</em> (<code>fa2a4ad</code>). It is not in the patch of <a href="#patch">section 6</a>.</p>
+
+<h3 class="step">Glossary</h3>
+<dl>
+  <dt>File transfer</dt>
+  <dd>The service a host uses to read files from the card. The host writes commands to <code>FT_Packet_In</code> (<code>READ</code>, and one <code>FILE_ACK</code> per packet it receives); the FlySight answers on <code>FT_Packet_Out</code> (<code>ACK</code> or <code>NAK</code>, then the <code>FILE_DATA</code> packets).</dd>
+  <dt>Receive queue</dt>
+  <dd>Where the packets written by the host wait until the task <code>FS_CRS_Update()</code> takes them one by one with <code>Custom_CRS_GetNextRxPacket()</code>.</dd>
+  <dt>Idle state, reading state</dt>
+  <dd>The two states of that task that matter here. <code>FS_CRS_State_Idle()</code> handles commands. <code>FS_CRS_State_Read()</code> runs while a file is being sent and handles only <code>FILE_ACK</code> and <code>CANCEL</code>.</dd>
+</dl>
+
+<h3 class="step">Problem</h3>
+<p><code>FS_CRS_State_Read()</code> empties the receive queue in one pass, and only afterwards decides that the file is done:</p>
+<div class="file">FlySight/crs.c</div>
+<pre><code>while ((next_state == FS_CRS_STATE_READ) &amp;&amp; (packet = Custom_CRS_GetNextRxPacket()))
+{
+	switch (packet-&gt;data[0])
+	{
+	case FS_CRS_COMMAND_CANCEL:   ...
+	case FS_CRS_COMMAND_FILE_ACK: ... ++next_ack; ...
+	}                                              <span class="cm">// any other packet: taken out of the queue, and nothing</span>
+}
+...
+if (next_ack == last_packet)                       <span class="cm">// decided once the queue is empty</span>
+{
+	next_state = FS_CRS_STATE_IDLE;
+}</code></pre>
+<p>A command that is already in the queue behind the acknowledgement of the last packet is therefore taken out while the state is still "reading", matches no case, and is dropped without an answer. A host that asks for a second file as soon as the first one is complete then waits for nothing.</p>
+<p><strong>Measured</strong> from Linux, where BlueZ sends the acknowledgement and the next request back to back. SkyGames reads <code>FLYSIGHT.TXT</code> then <code>CONFIG.TXT</code> at each connection: the request for the second file got no answer in 6 connections out of 12 on the branch, and in 3 out of 16 on unmodified <code>master</code> and <code>develop</code>. Before the application learned to ask again, such a connection ended with <code>CONFIG.TXT</code> not read after 20 s (2 connections out of 10). It was not looked for from macOS, iOS or Android.</p>
+
+<h3 class="step">Proposed fix</h3>
+<p>Stop reading the queue once the whole file is acknowledged, and call the update task again so that the idle state handles what is waiting:</p>
+<div class="file">FlySight/crs.c</div>
+<pre><code> 			case FS_CRS_COMMAND_FILE_ACK:
+ 				...
+<span class="add">+
++				if (next_ack == last_packet)
++				{
++					// The whole file is acknowledged. A packet waiting behind
++					// this one is a new command: leave it for the idle state
++					next_state = FS_CRS_STATE_IDLE;
++				}</span>
+ 				break;
+ ...
+ 	if (next_state == FS_CRS_STATE_IDLE)
+ 	{
+ 		...
+ 		// De-initialize disk
+ 		FS_ResourceManager_ReleaseResource(FS_RESOURCE_FATFS);
+<span class="add">+
++		// Call update task, in case a command is already waiting
++		UTIL_SEQ_SetTask(1&lt;&lt;CFG_TASK_FS_CRS_UPDATE_ID, CFG_SCH_PRIO_1);</span>
+ 	}</code></pre>
+<p><strong>Measured with the fix:</strong> no request lost in 40 connections. Independently of the firmware, the application now sends a read request again when nothing answers it within 2 s, which is what makes it work with a firmware that does not have this fix (20 connections out of 20, 8 of them after a second request).</p>
+
+<h3 class="step">Tests</h3>
+<p>From the Linux PC, on each build. <code>master</code> and <code>develop</code> are the published commits; "+ fix" is the same with this fix and nothing else.</p>
+<table>
+  <tr><th>Test</th><th><code>master</code></th><th><code>master</code> + fix</th><th><code>develop</code></th><th><code>develop</code> + fix</th></tr>
+  <tr><td>A file read 30 times, each time with a ping written right behind the acknowledgement of its last packet</td><td class="ko">ping dropped 19 times</td><td class="ok">answered 30 times</td><td class="ko">ping dropped 27 times</td><td class="ok">answered 30 times</td></tr>
+  <tr><td>The sequence of the application, <code>FLYSIGHT.TXT</code> then <code>CONFIG.TXT</code>, over 12 connections</td><td class="ok">both read, 12 of 12</td><td class="ok">both read, 12 of 12</td><td class="ok">both read, 12 of 12</td><td class="ok">both read, 12 of 12</td></tr>
+</table>
+<p>The ping of the first row does not use the card, so that row measures this defect and nothing else. In the second row no request was lost on any build, the two without the fix included: whether the request of the application lands behind the acknowledgement or a moment later depends on timing, and the series quoted under "Problem" lost some. The script of the first row is <code>linux/crs_back_to_back.py</code>.</p>
+
+<!-- ================================================================== -->
+<h2 id="vcc"><span class="num">10.</span>Linux, bug 6: a microSD card powered again too soon locks the FlySight</h2>
+
+<p>One commit on the branch, <em>Keep VCC off for 50 ms once it is disabled</em> (<code>d94ea11</code>). It is not in the patch of <a href="#patch">section 6</a>.</p>
+
+<h3 class="step">Glossary</h3>
+<dl>
+  <dt><code>VCC_EN</code></dt>
+  <dd>The pin that switches the supply of the microSD card. <code>VCC_Init()</code> sets it, <code>VCC_DeInit()</code> clears it.</dd>
+  <dt>Resource manager</dt>
+  <dd><code>resource_manager.c</code>. It counts the users of the supply, of the card and of FatFs. The card is mounted when the first user asks for it (<code>FatFS_Init()</code>), and unmounted and switched off when the last one lets go: at the end of each file transfer, in particular.</dd>
+  <dt><code>Error_Handler()</code></dt>
+  <dd>Disables the interrupts, turns the LED red and loops for ever. Only a reset gets the firmware out of it.</dd>
+</dl>
+
+<h3 class="step">Problem</h3>
+<p>A file command that follows another one finds the card just switched off, and switches it on again at once:</p>
+<div class="file">FlySight/resource_manager.c</div>
+<pre><code>static void VCC_DeInit(void)
+{
+	...
+	HAL_GPIO_WritePin(VCC_EN_GPIO_Port, VCC_EN_Pin, GPIO_PIN_RESET);   <span class="cm">// end of a transfer: card off</span>
+	...
+}
+
+static FS_ResourceManager_Result_t FatFS_Init(void)                    <span class="cm">// next command: card on, then</span>
+{
+	...
+	if (f_mount(&amp;fs, "0:/", 1) != FR_OK)
+	{
+		Error_Handler();                                               <span class="cm">// never returns</span>
+	}
+	...
+}</code></pre>
+<p>When the card stays without power for about 1 ms it does not restart cleanly, <code>f_mount()</code> fails, and the FlySight stops advertising and answers nothing until it is reset.</p>
+<p><strong>Measured</strong> with an experiment in the firmware alone: mount the card, cut its power for a chosen time, mount it again, six times per duration.</p>
+<table>
+  <tr><th>Time without power</th><th>Second mount</th></tr>
+  <tr><td>0 to 0.7 ms (8 durations)</td><td class="ok">6 of 6 OK each</td></tr>
+  <tr><td>1.0 ms</td><td class="ko">2 of 6 fail</td></tr>
+  <tr><td>1.3 ms</td><td class="ko">6 of 6 fail</td></tr>
+  <tr><td>1.6 to 45 ms (10 durations)</td><td class="ok">6 of 6 OK each</td></tr>
+</table>
+<p>Each failure is the same, and is what a firmware locked up during a BLE session held in memory when it was read over SWD: the card had answered its initialisation but had been taken for a standard-capacity card when it is a high-capacity one, had refused the switch to high speed, and the sector read as sector 0 was not sector 0, so FatFs found no file system.</p>
+<p>Over BLE, a firmware that records each of its mounts shows how close a session comes. In 16 normal connections on <code>master</code> and <code>develop</code>, the request for the second file found the card less than 1 ms after its power was cut in 13 of them, and 2 s after in the 3 where the request had to be sent again. With a client that received every notification twice and answered in bursts, it was 0.5 to 2 ms, and the firmware locked up in 1 such session out of 4 on <code>master</code> and 2 out of 4 on <code>master</code> + patch. The lockup was never seen in a normal session.</p>
+
+<h3 class="step">Proposed fix</h3>
+<p>Keep the supply off long enough for the rail to discharge before anything can switch it on again:</p>
+<div class="file">FlySight/resource_manager.c</div>
+<pre><code><span class="add">+// Time VCC stays off once disabled, so that the rail discharges
++#define VCC_OFF_MSEC 50</span>
+ ...
+ static void VCC_DeInit(void)
+ {
+ 	...
+ 			/* Disable VCC */
+ 			HAL_GPIO_WritePin(VCC_EN_GPIO_Port, VCC_EN_Pin, GPIO_PIN_RESET);
+ 			...
+<span class="add">+
++			/* Keep VCC off until the rail has discharged. A microSD card
++			 * powered again about 1 ms after losing power does not restart
++			 * cleanly, and the mount that follows fails */
++			HAL_Delay(VCC_OFF_MSEC);</span>
+ 	...
+ }</code></pre>
+<p><strong>Measured with the fix:</strong> the same experiment gives 60 mounts out of 60, the 1.0 and 1.3 ms ones included. <code>master</code> + patch, which had just locked up at the second of the sessions with doubled notifications, went through 12 of them with the fix, and the branch through 8.</p>
+<p>The 50 ms are a margin over what was measured on one board with one card, 30 times the longest gap that failed; the rail was not looked at with an oscilloscope. Every time the supply is switched off now takes 50 ms longer, the end of active mode included. A card that cannot be mounted still ends in <code>Error_Handler()</code>, as everywhere in the firmware. A reset with the card powered, which the fix does not change, did no harm in 68 tries. Details and scripts are in <code>linux/README.md</code>.</p>
+
+<h3 class="step">Tests</h3>
+<p>On each build. <code>master</code> and <code>develop</code> are the published commits; "+ fix" is the same with this fix and nothing else. For the first four rows the firmware also carries the experiment described under "Problem", with 6 mounts per duration on <code>master</code> and 3 on the three others.</p>
+<table>
+  <tr><th>Test</th><th><code>master</code></th><th><code>master</code> + fix</th><th><code>develop</code></th><th><code>develop</code> + fix</th></tr>
+  <tr><td>Second mount after 0 to 0.7 ms without power (8 durations)</td><td class="ok">48 of 48 OK</td><td class="ok">24 of 24 OK</td><td class="ok">24 of 24 OK</td><td class="ok">24 of 24 OK</td></tr>
+  <tr><td>Second mount after 1.0 ms</td><td class="ko">2 of 6 fail</td><td class="ok">3 of 3 OK</td><td class="ko">3 of 3 fail</td><td class="ok">3 of 3 OK</td></tr>
+  <tr><td>Second mount after 1.3 ms</td><td class="ko">6 of 6 fail</td><td class="ok">3 of 3 OK</td><td class="ko">3 of 3 fail</td><td class="ok">3 of 3 OK</td></tr>
+  <tr><td>Second mount after 1.6 to 45 ms (10 durations)</td><td class="ok">60 of 60 OK</td><td class="ok">30 of 30 OK</td><td class="ok">30 of 30 OK</td><td class="ok">30 of 30 OK</td></tr>
+  <tr><td>BLE sessions with every notification doubled, firmware read over SWD after each</td><td class="ko">1 lockup in 6</td><td class="ok">0 lockups in 6</td><td class="ko">1 lockup in 6</td><td class="ok">0 lockups in 6</td></tr>
+</table>
+<p>In the last row a session is: a program that left its notification sessions behind, then two connections of the native library and two of the application, each reading both files. A lockup is a firmware found in <code>Error_Handler()</code> afterwards. The scripts are <code>linux/sd_power_gap.py</code>, with <code>linux/sd-power-gap-experiment.patch</code>, and <code>linux/stale_subscriber.py</code>.</p>
 
 </main>
 </body>
