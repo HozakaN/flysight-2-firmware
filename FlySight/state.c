@@ -32,6 +32,9 @@
 #include "state.h"
 #include "version.h"
 
+#define STATE_FILE "/flysight.txt"
+#define STATE_TEMP "/flysight.tmp"
+
 static FS_State_Data_t state;
 static FIL stateFile;
 
@@ -180,12 +183,18 @@ void FS_State_Read(void)
 	memset(state.ble_erk, 0, CONFIG_DATA_ER_LEN);
 	state.active_mode = FS_ACTIVE_MODE_DEFAULT;
 
-	if (f_open(&stateFile, "/flysight.txt", FA_READ) != FR_OK)
+	if (f_open(&stateFile, STATE_FILE, FA_READ) != FR_OK)
 	{
-		/* No state file yet: the keys must still be generated, or this boot would run
-		   with all-zero root keys and the next one with different ones */
-		FS_State_Complete();
-		return;
+		/* A reset between the removal of the previous state file and the renaming of
+		   the new one leaves only the new one: put it in place and read it */
+		if ((f_rename(STATE_TEMP, STATE_FILE) != FR_OK) ||
+				(f_open(&stateFile, STATE_FILE, FA_READ) != FR_OK))
+		{
+			/* No state file yet: the keys must still be generated, or this boot would run
+			   with all-zero root keys and the next one with different ones */
+			FS_State_Complete();
+			return;
+		}
 	}
 
 	while (!f_eof(&stateFile))
@@ -247,11 +256,14 @@ void FS_State_Read(void)
 	FS_State_Complete();
 }
 
-static void FS_State_Write(void)
+/* Writes the state to stateFile, which is open, and closes it.
+   Returns 0 if part of it did not reach the card. */
+static uint8_t FS_State_WriteContent(void)
 {
 	const uint8_t * const pubkey = (uint8_t *) 0x08018200;
 
 	WirelessFwInfo_t WirelessInfo;
+	uint8_t complete;
 
 	// Read the firmware version of both the wireless stack and the FUS
 	if (SHCI_GetWirelessFwInfo(&WirelessInfo) != SHCI_Success)
@@ -259,14 +271,14 @@ static void FS_State_Write(void)
 		Error_Handler();
 	}
 
-	// Open FlySight info file
-	if (f_open(&stateFile, "/flysight.txt", FA_WRITE|FA_CREATE_ALWAYS) != FR_OK)
-	{
-		Error_Handler();
-	}
-
 	// Write device info
-	f_printf(&stateFile, "; FlySight - http://flysight.ca\n\n");
+	if (f_printf(&stateFile, "; FlySight - http://flysight.ca\n\n") < 0)
+	{
+		// Nothing can be written. On a full card each further write would
+		// search the whole FAT for a free cluster before it fails as well
+		f_close(&stateFile);
+		return 0;
+	}
 
 	f_printf(&stateFile, "; Firmware version\n\n");
 
@@ -325,10 +337,38 @@ static void FS_State_Write(void)
 
 	f_printf(&stateFile, "Pubkey_Y:     ");
 	FS_State_WriteHex_8(&stateFile, pubkey + 32, 32);
-	f_printf(&stateFile, "\n");
+
+	// On a full card every write fails from some point on, this last one
+	// included, and FatFs does not count that as an error of the file
+	complete = (f_printf(&stateFile, "\n") >= 0) && !f_error(&stateFile);
 
 	// Close FlySight info file
-	f_close(&stateFile);
+	return (f_close(&stateFile) == FR_OK) && complete;
+}
+
+static void FS_State_Write(void)
+{
+	// Write the new FlySight info file next to the previous one, which stays
+	// valid until the new one is complete
+	if ((f_open(&stateFile, STATE_TEMP, FA_WRITE|FA_CREATE_ALWAYS) == FR_OK) &&
+			FS_State_WriteContent())
+	{
+		// Replace the previous file
+		f_unlink(STATE_FILE);
+		f_rename(STATE_TEMP, STATE_FILE);
+		return;
+	}
+
+	// No room for a second file: rewrite the previous one in place
+	f_unlink(STATE_TEMP);
+
+	// Open FlySight info file
+	if (f_open(&stateFile, STATE_FILE, FA_WRITE|FA_CREATE_ALWAYS) != FR_OK)
+	{
+		Error_Handler();
+	}
+
+	FS_State_WriteContent();
 }
 
 void FS_State_Init(void)
