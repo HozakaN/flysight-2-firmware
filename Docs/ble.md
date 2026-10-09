@@ -31,6 +31,7 @@ FlySight 2 employs BLE security features (bonding and whitelisting) to prevent u
     *   FlySight 2 uses the BLE "filter accept list" (based on the bonded device list). Outside of Pairing Request Mode, it only accepts connections from devices on this list (i.e., devices it has previously bonded with).
     *   **Adding Devices:** When a central device successfully completes the bonding process initiated during Pairing Request Mode, its address/identity is added to the FlySight's internal bonded device list, effectively whitelisting it for future connections.
     *   **Storage:** The bonded device list (including security keys like IRK/ERK) is stored persistently in the FlySight 2's non-volatile memory.
+    *   **Capacity:** The BLE stack keeps the list in a fixed area of 2028 bytes, 144 bytes per device with the reduced GATT record the firmware asks for (`SHCI_C2_BLE_INIT_OPTIONS_REDUC_GATTDB_NVM`): 14 devices fit. When a 15th one bonds, the stack erases the 14 others and keeps that one. A device erased that way is not told: it has to forget the FlySight and pair with it again.
     *   **Reconnecting with an identity address:** Bonded devices are also loaded into the controller's resolving list in *device privacy* mode, so a central may reconnect either from a resolvable private address or from its identity address. macOS connects from its public identity address; in the default *network privacy* mode the controller silently ignores such a request and the central just times out.
 
 3.  **Bonding Process:**
